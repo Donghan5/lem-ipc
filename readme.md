@@ -1,35 +1,31 @@
 # lem-ipc
 
-42 infrastructure project (out-circle) in prep.
+A 42 project in which each player runs in its own process. Players share a board through System V shared memory and coordinate through a semaphore and a message queue.
 
-## Main Rules of command line
-- the executable will be named `lemipc`
-- 0 is for graphic mode
-- the other 1 to 7 which are team numbers.
+## Run a match
 
-## Game Rules
-- Each player is represented by its team number on the grid.
-- Each second a player mooves
-- A player can move only in 4 directions (up, down, left and right)
-- A player can move several times in a row
-- You cannot differentiate players from the same team on the grid
-- All the players of a same team target all together the same ennemy player.
-- When two players from the same team surround an ennemy player, this one dies (diagonal works).
-- It's mandatory for a player to move when it's its turn, even if th's just next to its target.
-- The game stop when only one team is remaining.
+Build with `make`. Run all processes for a match from the same working directory. The first player creates the session and reads `LEMIPC_PLAYERS`, which defaults to four and accepts 2–400. The match starts when the expected roster has joined.
 
-## What we use
-- Shared memory segment --> contain map and game data
-- Semaphore sets --> secure the access of the shared memory segment
-- message queue --> allow the players of a same team to exchange ennemy player ID to focus.
+```sh
+LEMIPC_PLAYERS=3 ./lemipc 1 &
+./lemipc 1 &
+./lemipc 2 &
+./lemipc 0
+wait
+```
 
-## Architecture of project
-- Launch the game with `./lemipc [team_number]`
-- If `0` launch the game in graphic mode, else launch a player of the team number given.
-- init IPC and spawn a player in the map and wait for the other players to join.
-- When all the players are spawned, the game starts and each player move in its own process
-- Team communication with message queue.
-- When a player move, it update the shared memory segment with its new position and the new position of the ennemy player if it was killed (Sync game board).
-- Log showing (Following a subject asking)
-- Clean all the resources before exit.
-- 
+Start the first command and wait for its join message before starting the others when using a custom roster size. With the default roster size, launch four players. Arguments `1` through `7` select a team. Argument `0` opens a terminal view of an existing session. Use Ctrl-C to close the display or withdraw a player running in the foreground.
+
+Players check for elimination before each turn. They move one tile up, down, left, or right when a legal move is available, with one second between turns. A player is eliminated when two or more adjacent players belong to the same opposing team. Diagonal neighbors count for elimination. Teammates exchange target coordinates, and the last team remaining wins.
+
+## Source layout
+
+| Module | Responsibility |
+| --- | --- |
+| `main.c`, `config.c` | Command-line dispatch, roster configuration, and signal handling |
+| `session.c`, `resources.c` | Session discovery, synchronized initialization, board locking, and IPC removal |
+| `player.c`, `roster.c` | Joining, waiting for the roster, taking turns, and leaving |
+| `movement.c`, `capture.c`, `target.c` | Legal steps, elimination, and team targeting |
+| `display.c` | Copy the board under lock and render the snapshot after unlocking |
+
+The last departing player removes the IPC resources. If the remaining players are forcibly killed, for example with SIGKILL, the session can leave IPC resources behind.

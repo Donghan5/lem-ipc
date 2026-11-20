@@ -2,13 +2,14 @@ NAME = lemipc
 
 CC = cc
 CFLAGS = -Wall -Wextra -Werror
-CPPFLAGS = -Iinc -Ilibft
+CPPFLAGS = -Iinc -Ilibft -Ilibft/ft_printf
 
 LIBFT_DIR = libft
 LIBFT = $(LIBFT_DIR)/libft.a
+PRINTF = $(LIBFT_DIR)/ft_printf/ft_printf.a
 
-# List project source files explicitly here as they are added.
-SRCS =
+SRCS = src/main.c src/config.c src/session.c src/resources.c src/roster.c \
+       src/player.c src/movement.c src/capture.c src/target.c src/display.c
 OBJS = $(SRCS:.c=.o)
 
 .DEFAULT_GOAL := all
@@ -16,13 +17,16 @@ OBJS = $(SRCS:.c=.o)
 
 all: $(NAME)
 
-$(NAME): $(OBJS) $(LIBFT)
-	$(CC) $(CFLAGS) $(OBJS) $(LIBFT) -o $@
+$(NAME): $(OBJS) $(PRINTF) $(LIBFT)
+	$(CC) $(CFLAGS) $(OBJS) $(PRINTF) $(LIBFT) -o $@
 
 .c.o:
 	$(CC) $(CPPFLAGS) $(CFLAGS) -c $< -o $@
 
-$(OBJS): inc/lemipc.h libft/libft.h
+$(OBJS): inc/lemipc.h libft/libft.h libft/ft_printf/ft_printf.h
+
+$(PRINTF): FORCE
+	$(MAKE) -C $(LIBFT_DIR)/ft_printf
 
 $(LIBFT): FORCE
 	$(MAKE) -C $(LIBFT_DIR) libft.a
