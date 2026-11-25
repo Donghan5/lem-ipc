@@ -47,7 +47,7 @@ int	create_session(t_session *session, key_t key, int expected)
 
 	session->shm_id = -1;
 	session->queue_id = -1;
-	session->sem_id = semget(IPC_PRIVATE, 1, 0600);
+	session->sem_id = semget(IPC_PRIVATE, SESSION_SEMS, 0600);
 	initial.val = 1;
 	if (session->sem_id == -1 || semctl(session->sem_id, 0, SETVAL, initial)
 		== -1)

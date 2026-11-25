@@ -68,41 +68,34 @@ static void	clear_player(t_board *board, int player_id)
 	board->count--;
 }
 
-static bool	player_has_exited(const t_player *player)
+bool	has_live_players(const t_session *session, const t_board *board)
 {
-	return (player->pid > 0 && kill(player->pid, 0) == -1 && errno == ESRCH);
-}
-
-bool	has_live_players(const t_board *board)
-{
-	int				player_id;
-	const t_player	*player;
+	int	player_id;
 
 	player_id = 1;
 	while (player_id <= BOARD_CELLS)
 	{
-		player = &board->players[player_id];
-		if (player->team != 0 && !player_has_exited(player))
+		if (board->players[player_id].team != 0
+			&& slot_is_live(session, player_id))
 			return (true);
 		player_id++;
 	}
 	return (false);
 }
 
-void	reap_players(t_board *board)
+void	reap_players(t_session *session)
 {
-	int			player_id;
-	t_player	*player;
+	int	player_id;
 
 	player_id = 1;
 	while (player_id <= BOARD_CELLS)
 	{
-		player = &board->players[player_id];
-		if (player->team != 0 && player_has_exited(player))
-			clear_player(board, player_id);
+		if (session->board->players[player_id].team != 0
+			&& !slot_is_live(session, player_id))
+			clear_player(session->board, player_id);
 		player_id++;
 	}
-	record_winner(board);
+	record_winner(session->board);
 }
 
 void	leave_player(t_session *session, int player_id)

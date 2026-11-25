@@ -215,15 +215,17 @@ test_match_and_cleanup() {
 	check_cleanup "ipcs_clean_after_normal_match"
 }
 
-test_sigint_withdraws() {
+# Every terminating signal a user can send by accident must still clean up.
+test_signal_withdraws() {
+	local signal="$1" name="${1,,}"
 	new_match
 	start_first s1.log 4 "$BIN" 1
 	launch s2.log 4 "$BIN" 2
 	wait_for_log ' joined team ' s2.log
-	signal_players INT
+	signal_players "$signal"
 	collect_players 5
-	report "sigint_stops_every_player" "$EXITS_OK" 0 ""
-	check_cleanup "ipcs_clean_after_sigint_withdrawal"
+	report "sig${name}_stops_every_player" "$EXITS_OK" 0 ""
+	check_cleanup "ipcs_clean_after_sig${name}_withdrawal"
 }
 
 test_over_join_refused() {
@@ -346,6 +348,36 @@ test_sigkill_during_match() {
 	check_cleanup "ipc_cleanup_after_running_sigkill"
 }
 
+# The victim's parent execs sleep, which never calls wait(): once killed, the
+# victim stays a zombie, and kill(pid, 0) still succeeds on it.
+test_zombie_opponent_reaped() {
+	local holder victim zombie=0 winner=0
+	new_match
+	start_first zsurvivor.log 2 "$BIN" 1
+	(
+		cd "$DIR" || exit 1
+		LEMIPC_PLAYERS=2 "$BIN" 2 >zvictim.log 2>&1 &
+		exec sleep 30
+	) &
+	holder=$!
+	if wait_for_log ' moved$' zvictim.log; then
+		victim="$(pgrep -P "$holder" -x lemipc)"
+		if [ -n "$victim" ] && kill -KILL "$victim"; then
+			sleep 0.2
+			[[ "$(ps -o stat= -p "$victim")" == Z* ]] && zombie=1
+			wait_for_log '^Team 1 wins$' zsurvivor.log && winner=1
+		fi
+	fi
+	kill -KILL "$holder" 2>/dev/null
+	wait "$holder" 2>/dev/null
+	signal_players INT
+	collect_players 5
+	report "zombie_opponent_is_a_zombie" "$zombie" 0 ""
+	[ "$zombie" = 1 ] && [ "$EXITS_OK" = 1 ] || winner=0
+	report "zombie_opponent_reaped_survivor_wins" "$winner" 0 ""
+	check_cleanup "ipc_cleanup_after_zombie_opponent"
+}
+
 test_stale_session_replaced() {
 	local victim stale_ids replacement_ok=0
 	new_match
@@ -415,7 +447,7 @@ test_output_not_garbled() {
 	bad="$(sed '/^$/d' "$DIR/shared.log" | grep -cvE "$PLAYER_LINE")"
 	report "shared_output_match_completed" "$EXITS_OK" 0 ""
 	[ "$total" -ge 4 ] && [ "$bad" = 0 ] && ok=1
-	report "player_lines_never_garbled" "$ok" "$EXITS_OK" "malformed=$bad/$total lines"
+	report "player_lines_never_garbled" "$ok" 0 "malformed=$bad/$total lines"
 	check_cleanup "ipcs_clean_after_shared_output"
 }
 
@@ -438,6 +470,24 @@ test_valgrind_match() {
 	check_cleanup "ipcs_clean_after_valgrind"
 }
 
+# `lemipc N | head -1` closes stdout under the player: the next line it prints
+# raises SIGPIPE, which must end the match cleanly instead of killing it.
+test_closed_stdout_cleans_up() {
+	local ids status ok=0
+	new_match
+	launch "" 2 sh -c '"$0" 1 | head -1 >/dev/null' "$BIN"
+	launch "" 2 sh -c '"$0" 2 | head -1 >/dev/null' "$BIN"
+	collect_players 15
+	ids="$(cd "$DIR" && "$PROBE")"
+	status=$?
+	[ "$status" = 1 ] && ok=$EXITS_OK
+	if [ "$status" = 0 ]; then
+		IPC_IDS="${ids% *}"
+		reap_ipc >/dev/null
+	fi
+	report "closed_stdout_ends_match_cleanly" "$ok" 0 "probe=$status (1 = no session left)"
+}
+
 if [ ! -x "$BIN" ] || [ ! -x "$PROBE" ]; then
 	echo "integration: build lemipc and ipc_probe with make integration" >&2
 	exit 1
@@ -448,13 +498,15 @@ test_invalid_args
 test_invalid_env
 test_display_without_session
 test_match_and_cleanup
-test_sigint_withdraws
+for signal in INT TERM HUP QUIT; do test_signal_withdraws "$signal"; done
 test_over_join_refused
 test_simultaneous_launch
 test_display_renders_grid
 test_stress_20_players
 test_cleanup_after_sigkill
 test_sigkill_during_match
+test_zombie_opponent_reaped
+test_closed_stdout_cleans_up
 test_stale_session_replaced
 test_display_closes_last
 test_output_not_garbled

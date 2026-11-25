@@ -15,7 +15,10 @@ int	install_signals(void)
 	ft_bzero(&action, sizeof(action));
 	action.sa_handler = request_stop;
 	sigemptyset(&action.sa_mask);
-	if (sigaction(SIGINT, &action, NULL) == -1)
+	if (sigaction(SIGINT, &action, NULL) == -1
+		|| sigaction(SIGHUP, &action, NULL) == -1
+		|| sigaction(SIGQUIT, &action, NULL) == -1
+		|| sigaction(SIGPIPE, &action, NULL) == -1)
 		return (-1);
 	return (sigaction(SIGTERM, &action, NULL));
 }

@@ -21,6 +21,9 @@
 # define DEFAULT_PLAYERS 4
 # define TICK_MS 1000
 # define POLL_MS 100
+/* Semaphore 0 locks the board; 1..BOARD_CELLS track live player slots. */
+# define SESSION_SEMS 401
+# define ANNOUNCE_MAX 64
 
 typedef enum e_phase
 {
@@ -76,8 +79,11 @@ int		unlock_board(const t_session *session);
 int		run_player(t_session *session, int team);
 int		join_player(t_board *board, int team);
 void	leave_player(t_session *session, int player_id);
-void	reap_players(t_board *board);
-bool	has_live_players(const t_board *board);
+void	reap_players(t_session *session);
+bool	has_live_players(const t_session *session, const t_board *board);
+int		claim_slot(const t_session *session, int player_id);
+int		release_slot(const t_session *session, int player_id);
+bool	slot_is_live(const t_session *session, int player_id);
 bool	is_surrounded(const t_board *board, int player_id);
 bool	move_player(t_board *board, int player_id, int target_cell);
 void	choose_target(const t_board *board, int team, t_target *target);
@@ -88,5 +94,6 @@ int		read_player_count(void);
 int		install_signals(void);
 bool	stop_requested(void);
 void	wait_ms(long milliseconds);
+void	announce(const char *format, int first, int second);
 
 #endif

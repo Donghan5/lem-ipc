@@ -1,3 +1,4 @@
+#define _GNU_SOURCE
 #include "lemipc.h"
 
 static int	attach_session(t_session *session)
@@ -120,26 +121,45 @@ int	close_session(t_session *session)
 	return (unlock_directory(fd, result));
 }
 
-static int	change_lock(const t_session *session, short change)
+/*
+** Waits in POLL_MS slices instead of blocking in one semop(). A stop request
+** then ends the wait even if the owner is frozen (Ctrl+Z) or the signal landed
+** just before the wait began, which a check-then-semop() loop cannot see.
+** The first slice still runs, so an available lock is taken and the player
+** can leave the board gracefully. Fails with EINTR when stopped.
+*/
+int	lock_board(const t_session *session)
+{
+	struct sembuf	operation;
+	struct timespec	slice;
+
+	operation.sem_num = 0;
+	operation.sem_op = -1;
+	operation.sem_flg = SEM_UNDO;
+	slice.tv_sec = 0;
+	slice.tv_nsec = POLL_MS * 1000000L;
+	while (true)
+	{
+		if (semtimedop(session->sem_id, &operation, 1, &slice) == 0)
+			return (0);
+		if (errno != EAGAIN && errno != EINTR)
+			return (-1);
+		if (stop_requested())
+			return (errno = EINTR, -1);
+	}
+}
+
+/* Releasing never blocks, so only an interrupted call is retried. */
+int	unlock_board(const t_session *session)
 {
 	struct sembuf	operation;
 	int				result;
 
 	operation.sem_num = 0;
-	operation.sem_op = change;
+	operation.sem_op = 1;
 	operation.sem_flg = SEM_UNDO;
 	result = semop(session->sem_id, &operation, 1);
 	while (result == -1 && errno == EINTR)
 		result = semop(session->sem_id, &operation, 1);
 	return (result);
-}
-
-int	lock_board(const t_session *session)
-{
-	return (change_lock(session, -1));
-}
-
-int	unlock_board(const t_session *session)
-{
-	return (change_lock(session, 1));
 }

@@ -5,3 +5,5 @@
 obj
 rule.md
 lemipc
+compile_commands.json
+.cache

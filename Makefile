@@ -10,7 +10,7 @@ PRINTF = $(LIBFT_DIR)/ft_printf/ft_printf.a
 
 CORE_SRCS = src/config.c src/session.c src/resources.c src/roster.c \
             src/player.c src/movement.c src/capture.c src/target.c \
-            src/display.c
+            src/display.c src/liveness.c src/announce.c
 SRCS = src/main.c $(CORE_SRCS)
 OBJ_DIR = obj/src
 CORE_OBJS = $(CORE_SRCS:src/%.c=$(OBJ_DIR)/%.o)

@@ -1,3 +1,4 @@
+#include <sys/wait.h>
 #include "harness.h"
 
 static void	test_join(t_suite *s)
@@ -106,6 +107,44 @@ static void	test_one_team_wins_at_capacity(t_suite *s)
 	check(s, "highest_team_id_wins", b.winner, TEAM_COUNT);
 }
 
+/* A dead player is reaped even while it is an unwaited zombie. */
+static void	test_reap_zombie(t_suite *s)
+{
+	t_session	session = {.shm_id = -1, .queue_id = -1};
+	t_board		b;
+	siginfo_t	info;
+	pid_t		child;
+
+	session.sem_id = make_test_semaphore();
+	check(s, "reap_semaphore_created", session.sem_id >= 0, true);
+	if (session.sem_id < 0)
+		return ;
+	session.board = &b;
+	board_reset(&b, 3);
+	join_player(&b, 1);
+	join_player(&b, 2);
+	join_player(&b, 2);
+	check(s, "live_slot_claimed", claim_slot(&session, 1), 0);
+	child = fork();
+	if (child == 0)
+		_exit(claim_slot(&session, 2) == -1);
+	/* WNOWAIT waits for the exit but leaves the child a zombie. */
+	check(s, "zombie_exited_cleanly", waitid(P_PID, child, &info,
+			WEXITED | WNOWAIT) == 0 && info.si_status == 0, true);
+	check(s, "zombie_still_answers_kill", kill(child, 0), 0);
+	reap_players(&session);
+	check(s, "live_player_kept", b.players[1].team, 1);
+	check(s, "zombie_player_reaped", b.players[2].team, 0);
+	check(s, "never_claimed_player_reaped", b.players[3].team, 0);
+	check(s, "survivor_team_wins", b.winner, 1);
+	check(s, "release_cancels_claim", release_slot(&session, 1) == 0
+		&& !slot_is_live(&session, 1), true);
+	check(s, "release_never_blocks", release_slot(&session, 1) == -1
+		&& errno == EAGAIN, true);
+	waitpid(child, NULL, 0);
+	semctl(session.sem_id, 0, IPC_RMID);
+}
+
 /* 400 players on a 400-cell board: every tile taken, nobody can move. */
 static void	test_full_board(t_suite *s)
 {
@@ -155,6 +194,7 @@ int	main(void)
 	test_leave_and_winner(&s);
 	test_waiting_slot_reused(&s);
 	test_one_team_wins_at_capacity(&s);
+	test_reap_zombie(&s);
 	test_full_board(&s);
 	return (suite_end(&s));
 }

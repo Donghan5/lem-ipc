@@ -68,6 +68,42 @@ static void	test_contended_lock(t_suite *s, t_session *session)
 	check(s, "unlocked_value_is_one", semctl(session->sem_id, 0, GETVAL), 1);
 }
 
+/*
+** A lock owner frozen by Ctrl+Z (simulated by the parent never unlocking)
+** must not trap the others: a stop request has to end their wait, whether it
+** lands while they are blocked or just before they start waiting.
+*/
+static void	test_stop_while_waiting(t_suite *s, t_session *session)
+{
+	pid_t	blocked;
+	pid_t	early;
+
+	check(s, "frozen_owner_holds_lock", lock_board(session), 0);
+	blocked = fork();
+	if (blocked == 0)
+	{
+		alarm(3);
+		if (install_signals() == -1)
+			_exit(1);
+		_exit(!(lock_board(session) == -1 && errno == EINTR));
+	}
+	check(s, "stop_target_blocks", wait_for_waiter(session->sem_id), true);
+	check(s, "stop_sent_to_waiter", kill(blocked, SIGINT), 0);
+	check(s, "stop_ends_blocked_wait", wait_status(blocked, 0), true);
+	early = fork();
+	if (early == 0)
+	{
+		alarm(3);
+		if (install_signals() == -1 || raise(SIGINT) != 0)
+			_exit(1);
+		_exit(!(lock_board(session) == -1 && errno == EINTR));
+	}
+	check(s, "stop_before_wait_never_blocks", wait_status(early, 0), true);
+	check(s, "frozen_owner_unlocks", unlock_board(session), 0);
+	check(s, "lock_free_after_stopped_waiters",
+		semctl(session->sem_id, 0, GETVAL), 1);
+}
+
 static void	test_crashed_lock_owner(t_suite *s, t_session *session)
 {
 	int		ready[2];
@@ -130,7 +166,7 @@ static bool	id_gone(int result)
 }
 
 static void	test_removal(t_suite *s, t_session *session, key_t key,
-		bool with_waiter)
+		bool with_waiter, int expected)
 {
 	struct shmid_ds	memory;
 	struct msqid_ds	queue;
@@ -158,7 +194,7 @@ static void	test_removal(t_suite *s, t_session *session, key_t key,
 		shmctl(session->shm_id, IPC_STAT, &memory) == 0 && memory.shm_nattch == 1, true);
 	result = shmget(key, sizeof(t_board), 0600);
 	check(s, "removed_key_immediately_unavailable", result == -1 && errno == ENOENT, true);
-	check(s, "attached_view_survives_removal", session->board->expected, 3);
+	check(s, "attached_view_survives_removal", session->board->expected, expected);
 	check(s, "last_view_detaches", shmdt(session->board), 0);
 	check(s, "shared_memory_id_gone_after_last_detach",
 		id_gone(shmctl(session->shm_id, IPC_STAT, &memory)), true);
@@ -173,6 +209,162 @@ static void	test_removal(t_suite *s, t_session *session, key_t key,
 		msgctl(session->queue_id, IPC_RMID, NULL);
 	if (semctl(session->sem_id, 0, GETVAL) >= 0)
 		semctl(session->sem_id, 0, IPC_RMID);
+}
+
+enum { RACE_PLAYERS = 4, RACE_TURNS = 100 };
+
+static bool	board_is_consistent(const t_board *board)
+{
+	int	teams[TEAM_COUNT + 1] = {0};
+	int	count = 0;
+
+	for (int id = 1; id <= BOARD_CELLS; id++)
+	{
+		const t_player *player = &board->players[id];
+
+		if (player->team == 0)
+			continue ;
+		if (player->team < 1 || player->team > TEAM_COUNT || player->pid <= 0
+			|| player->cell < 0 || player->cell >= BOARD_CELLS
+			|| board->cells[player->cell] != id)
+			return (false);
+		teams[player->team]++;
+		count++;
+	}
+	for (int cell = 0; cell < BOARD_CELLS; cell++)
+	{
+		int id = board->cells[cell];
+
+		if (id != 0 && (id < 1 || id > BOARD_CELLS
+				|| board->players[id].team == 0 || board->players[id].cell != cell))
+			return (false);
+	}
+	for (int team = 0; team <= TEAM_COUNT; team++)
+		if (teams[team] != board->team_count[team])
+			return (false);
+	return (count == board->count && count <= board->expected);
+}
+
+static void	race_worker(int team, int ready, int start, int turns)
+{
+	t_session	session = {0};
+	char		marker;
+	int			id;
+	bool		valid;
+
+	alarm(10);
+	if (write(ready, "R", 1) != 1 || read(start, &marker, 1) != 0
+		|| open_session(&session, RACE_PLAYERS) == -1
+		|| lock_board(&session) == -1)
+		_exit(1);
+	/* Give every worker the same first spawn candidate. */
+	srand(1);
+	id = join_player(session.board, team);
+	valid = id > 0 && board_is_consistent(session.board);
+	if (unlock_board(&session) == -1 || !valid)
+		_exit(1);
+	if (write(ready, "J", 1) != 1)
+		_exit(1);
+	close(ready);
+	/* Start taking turns only after all joins have been reported. */
+	if (read(turns, &marker, 1) != 0)
+		_exit(1);
+	for (int turn = 0; turn < RACE_TURNS; turn++)
+	{
+		if (lock_board(&session) == -1)
+			_exit(1);
+		move_player(session.board, id, BOARD_CELLS / 2);
+		valid = session.board->phase == RUNNING && board_is_consistent(session.board);
+		if (unlock_board(&session) == -1 || !valid)
+			_exit(1);
+	}
+	_exit(shmdt(session.board) == -1);
+}
+
+static bool	receive_workers(int fd, int count, char expected)
+{
+	char	marker;
+
+	for (int index = 0; index < count; index++)
+		if (read(fd, &marker, 1) != 1 || marker != expected)
+			return (false);
+	return (true);
+}
+
+static bool	joined_workers(const t_board *board, const pid_t *children)
+{
+	if (!board_is_consistent(board) || board->expected != RACE_PLAYERS
+		|| board->count != RACE_PLAYERS || board->phase != RUNNING)
+		return (false);
+	for (int index = 0; index < RACE_PLAYERS; index++)
+	{
+		int matches = 0;
+
+		for (int id = 1; id <= BOARD_CELLS; id++)
+			if (board->players[id].pid == children[index]
+				&& board->players[id].team == 1 + index % 2)
+				matches++;
+		if (matches != 1)
+			return (false);
+	}
+	return (true);
+}
+
+static void	test_concurrent_board(t_suite *s, key_t key)
+{
+	int			pipes[3][2];
+	int			created = 0;
+	pid_t		children[RACE_PLAYERS];
+	int			workers = 0;
+	t_session	session = {0};
+	bool		attached;
+
+	for (; created < 3; created++)
+		if (pipe(pipes[created]) == -1)
+			break ;
+	check(s, "concurrent_board_pipes_created", created, 3);
+	if (created != 3)
+	{
+		for (int index = 0; index < created; index++)
+		{
+			close(pipes[index][0]);
+			close(pipes[index][1]);
+		}
+		return ;
+	}
+	for (; workers < RACE_PLAYERS; workers++)
+	{
+		children[workers] = fork();
+		if (children[workers] == -1)
+			break ;
+		if (children[workers] == 0)
+		{
+			close(pipes[0][0]);
+			close(pipes[1][1]);
+			close(pipes[2][1]);
+			race_worker(1 + workers % 2, pipes[0][1], pipes[1][0], pipes[2][0]);
+		}
+	}
+	close(pipes[0][1]);
+	close(pipes[1][0]);
+	close(pipes[2][0]);
+	check(s, "all_workers_ready_before_session_open",
+		receive_workers(pipes[0][0], workers, 'R') && workers == RACE_PLAYERS, true);
+	close(pipes[1][1]);
+	check(s, "all_workers_join_before_first_turn",
+		receive_workers(pipes[0][0], workers, 'J') && workers == RACE_PLAYERS, true);
+	close(pipes[0][0]);
+	attached = open_session(&session, 0) == 0;
+	check(s, "concurrent_session_available_to_observer", attached, true);
+	close(pipes[2][1]);
+	for (int index = 0; index < workers; index++)
+		check(s, "worker_board_consistent_after_each_join_and_turn", wait_status(children[index], 0), true);
+	if (attached)
+	{
+		check(s, "all_workers_joined_same_board_once",
+			workers == RACE_PLAYERS && joined_workers(session.board, children), true);
+		test_removal(s, &session, key, false, RACE_PLAYERS);
+	}
 }
 
 static void	test_lifecycle(t_suite *s)
@@ -190,6 +382,7 @@ static void	test_lifecycle(t_suite *s)
 	check(s, "session_key_is_unused", result == -1 && errno == ENOENT, true);
 	if (result != -1 || errno != ENOENT)
 		return ;
+	test_concurrent_board(s, key);
 	for (cycle = 0; cycle < 3; cycle++)
 	{
 		result = open_session(&session, 3);
@@ -202,10 +395,11 @@ static void	test_lifecycle(t_suite *s)
 		if (cycle == 0 && semctl(session.sem_id, 0, GETVAL) == 1)
 		{
 			test_contended_lock(s, &session);
+			test_stop_while_waiting(s, &session);
 			test_crashed_lock_owner(s, &session);
 			test_reattach(s, &session);
 		}
-		test_removal(s, &session, key, cycle == 2);
+		test_removal(s, &session, key, cycle == 2, 3);
 	}
 }
 
