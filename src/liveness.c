@@ -1,34 +1,79 @@
 #include "lemipc.h"
 
+static int	stat_path(char *path, pid_t pid)
+{
+	char	digits[11];
+	int		count;
+	int		length;
+
+	count = 0;
+	digits[count++] = '0' + pid % 10;
+	while (pid >= 10)
+	{
+		pid /= 10;
+		digits[count++] = '0' + pid % 10;
+	}
+	ft_strlcpy(path, "/proc/", 7);
+	length = 6;
+	while (count > 0)
+		path[length++] = digits[--count];
+	ft_strlcpy(path + length, "/stat", 6);
+	return (open(path, O_RDONLY));
+}
+
+/* Field 22 of /proc/<pid>/stat, counted from the state field (3). */
+static long long	parse_start(const char *field)
+{
+	long long	start;
+	int			index;
+
+	if (*field == 'Z' || *field == 'X')
+		return (-1);
+	index = 3;
+	while (index < 22 && *field != '\0')
+		if (*field++ == ' ')
+			index++;
+	if (index != 22 || !ft_isdigit(*field))
+		return (-1);
+	start = 0;
+	while (ft_isdigit(*field))
+		start = start * 10 + (*field++ - '0');
+	return (start);
+}
+
 /*
-** Semaphores 1..BOARD_CELLS count the live processes holding each player
-** slot. A claim is made with SEM_UNDO, so the kernel gives it back the
-** moment its owner exits, even while that owner is an unwaited zombie, and
-** independently of pid reuse. kill(pid, 0) can detect neither case.
+** The start time of a running process, or -1 once it has exited, including
+** while it is an unwaited zombie, which kill(pid, 0) still reports as alive.
+** A pid and its start time together name one process, even after pid reuse.
 */
-int	claim_slot(const t_session *session, int player_id)
+long long	process_start(pid_t pid)
 {
-	struct sembuf	operation;
+	char	path[24];
+	char	stat[512];
+	char	*state;
+	ssize_t	size;
+	int		fd;
 
-	operation.sem_num = player_id;
-	operation.sem_op = 1;
-	operation.sem_flg = SEM_UNDO;
-	return (semop(session->sem_id, &operation, 1));
+	if (pid <= 0)
+		return (-1);
+	fd = stat_path(path, pid);
+	if (fd == -1)
+		return (-1);
+	size = read(fd, stat, sizeof(stat) - 1);
+	close(fd);
+	if (size <= 0)
+		return (-1);
+	stat[size] = '\0';
+	state = ft_strrchr(stat, ')');
+	if (state == NULL || state[1] != ' ')
+		return (-1);
+	return (parse_start(state + 2));
 }
 
-/* Cancels the claim and its pending undo; never blocks. */
-int	release_slot(const t_session *session, int player_id)
+/* Without /proc at join time, fall back to plain pid existence. */
+bool	player_is_live(const t_player *player)
 {
-	struct sembuf	operation;
-
-	operation.sem_num = player_id;
-	operation.sem_op = -1;
-	operation.sem_flg = SEM_UNDO | IPC_NOWAIT;
-	return (semop(session->sem_id, &operation, 1));
-}
-
-/* A slot nobody holds, or a removed set, means its player is gone. */
-bool	slot_is_live(const t_session *session, int player_id)
-{
-	return (semctl(session->sem_id, player_id, GETVAL) > 0);
+	if (player->started < 0)
+		return (!(kill(player->pid, 0) == -1 && errno == ESRCH));
+	return (process_start(player->pid) == player->started);
 }

@@ -107,42 +107,50 @@ static void	test_one_team_wins_at_capacity(t_suite *s)
 	check(s, "highest_team_id_wins", b.winner, TEAM_COUNT);
 }
 
-/* A dead player is reaped even while it is an unwaited zombie. */
+/*
+** A dead player is reaped even while it is an unwaited zombie, and a pid now
+** owned by another process (same pid, different start time) counts as dead.
+*/
 static void	test_reap_zombie(t_suite *s)
 {
-	t_session	session = {.shm_id = -1, .queue_id = -1};
 	t_board		b;
 	siginfo_t	info;
 	pid_t		child;
+	int			hold[2];
+	char		marker;
 
-	session.sem_id = make_test_semaphore();
-	check(s, "reap_semaphore_created", session.sem_id >= 0, true);
-	if (session.sem_id < 0)
+	if (pipe(hold) == -1 || (child = fork()) == -1)
+	{
+		check(s, "zombie_child_started", 0, 1);
 		return ;
-	session.board = &b;
+	}
+	if (child == 0)
+	{
+		close(hold[1]);
+		_exit(read(hold[0], &marker, 1) != 0);
+	}
+	close(hold[0]);
 	board_reset(&b, 3);
 	join_player(&b, 1);
 	join_player(&b, 2);
 	join_player(&b, 2);
-	check(s, "live_slot_claimed", claim_slot(&session, 1), 0);
-	child = fork();
-	if (child == 0)
-		_exit(claim_slot(&session, 2) == -1);
+	check(s, "joined_player_has_start_time", b.players[1].started > 0, true);
+	b.players[2].pid = child;
+	b.players[2].started = process_start(child);
+	b.players[3].started++;
+	check(s, "running_child_is_live", player_is_live(&b.players[2]), true);
+	close(hold[1]);
 	/* WNOWAIT waits for the exit but leaves the child a zombie. */
 	check(s, "zombie_exited_cleanly", waitid(P_PID, child, &info,
 			WEXITED | WNOWAIT) == 0 && info.si_status == 0, true);
 	check(s, "zombie_still_answers_kill", kill(child, 0), 0);
-	reap_players(&session);
+	reap_players(&b);
 	check(s, "live_player_kept", b.players[1].team, 1);
 	check(s, "zombie_player_reaped", b.players[2].team, 0);
-	check(s, "never_claimed_player_reaped", b.players[3].team, 0);
+	check(s, "reused_pid_player_reaped", b.players[3].team, 0);
 	check(s, "survivor_team_wins", b.winner, 1);
-	check(s, "release_cancels_claim", release_slot(&session, 1) == 0
-		&& !slot_is_live(&session, 1), true);
-	check(s, "release_never_blocks", release_slot(&session, 1) == -1
-		&& errno == EAGAIN, true);
 	waitpid(child, NULL, 0);
-	semctl(session.sem_id, 0, IPC_RMID);
+	check(s, "reaped_child_has_no_start", process_start(child), -1);
 }
 
 /* 400 players on a 400-cell board: every tile taken, nobody can move. */

@@ -6,6 +6,8 @@ static int	fail_semaphore;
 static int	fail_queue;
 static int	fail_memory;
 static int	fail_attach;
+/* Emulates SEMMSL: the most semaphores the kernel allows in one set. */
+static int	semaphores_per_set;
 
 int	__real_semget(key_t key, int count, int flags);
 int	__real_msgget(key_t key, int flags);
@@ -14,10 +16,33 @@ void	*__real_shmat(int id, const void *address, int flags);
 
 int	__wrap_semget(key_t key, int count, int flags)
 {
+	if (semaphores_per_set > 0 && count > semaphores_per_set)
+		return (errno = EINVAL, -1);
 	if (!fail_semaphore)
 		return (__real_semget(key, count, flags));
 	errno = ENOSPC;
 	return (-1);
+}
+
+/*
+** The session must fit the tightest kernel: a single semaphore. Anything more
+** makes the game unplayable where SEMMSL or SEMMNS headroom is small.
+*/
+static void	test_single_semaphore_kernel(t_suite *s)
+{
+	t_session	session;
+	int			result;
+
+	semaphores_per_set = 1;
+	result = create_session(&session, IPC_PRIVATE, 2);
+	semaphores_per_set = 0;
+	check(s, "session_fits_one_semaphore_kernel", result, 0);
+	if (result != 0)
+		return ;
+	check(s, "single_semaphore_set_size",
+		semctl(session.sem_id, 1, GETVAL) == -1 && errno == EINVAL, true);
+	check(s, "single_semaphore_session_removed", remove_session(&session), 0);
+	check(s, "single_semaphore_view_detached", shmdt(session.board), 0);
 }
 
 int	__wrap_msgget(key_t key, int flags)
@@ -227,6 +252,7 @@ int	main(void)
 	test_creation_failure(&s, &fail_queue, ENOSPC);
 	test_creation_failure(&s, &fail_memory, ENOSPC);
 	test_creation_failure(&s, &fail_attach, ENOMEM);
+	test_single_semaphore_kernel(&s);
 	test_exchange(&s);
 	return (suite_end(&s));
 }

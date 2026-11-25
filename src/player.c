@@ -2,7 +2,7 @@
 
 /*
 ** A stop request that ended a lock wait is a normal exit. The player stays on
-** the board, but SEM_UNDO frees its slot at exit and the others reap it.
+** the board until it exits; the other players then reap it.
 */
 static int	lock_failed(void)
 {
@@ -17,7 +17,6 @@ static int	finish_player(t_session *session, int player_id, bool eliminated)
 	int	winner;
 
 	winner = session->board->winner;
-	release_slot(session, player_id);
 	leave_player(session, player_id);
 	if (eliminated)
 		announce("Player %d was eliminated", player_id, 0);
@@ -43,7 +42,7 @@ static int	play_match(t_session *session, int player_id, int team)
 	ft_bzero(&target, sizeof(target));
 	while (lock_board(session) == 0)
 	{
-		reap_players(session);
+		reap_players(session->board);
 		eliminated = session->board->phase == RUNNING
 			&& is_surrounded(session->board, player_id);
 		if (stop_requested() || eliminated || session->board->phase == FINISHED)
@@ -71,14 +70,8 @@ int	run_player(t_session *session, int team)
 
 	if (lock_board(session) == -1)
 		return (lock_failed());
-	reap_players(session);
+	reap_players(session->board);
 	player_id = join_player(session->board, team);
-	if (player_id != 0 && claim_slot(session, player_id) == -1)
-	{
-		perror("semop");
-		leave_player(session, player_id);
-		return (EXIT_FAILURE);
-	}
 	if (unlock_board(session) == -1)
 		return (perror("semop"), EXIT_FAILURE);
 	if (player_id == 0)

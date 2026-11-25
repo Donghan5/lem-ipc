@@ -55,7 +55,7 @@ int	make_test_semaphore(void)
 	union u_semarg	initial;
 	int				sem_id;
 
-	sem_id = semget(IPC_PRIVATE, SESSION_SEMS, 0600);
+	sem_id = semget(IPC_PRIVATE, 1, 0600);
 	if (sem_id == -1)
 		return (-1);
 	initial.val = 1;

@@ -45,7 +45,7 @@ int	join_player(t_board *board, int team)
 	while (board->cells[cell] != 0)
 		cell = (cell + 1) % BOARD_CELLS;
 	player = &board->players[player_id];
-	*player = (t_player){team, cell, -1, getpid()};
+	*player = (t_player){team, cell, -1, getpid(), process_start(getpid())};
 	board->cells[cell] = player_id;
 	board->team_count[team]++;
 	board->count++;
@@ -68,7 +68,7 @@ static void	clear_player(t_board *board, int player_id)
 	board->count--;
 }
 
-bool	has_live_players(const t_session *session, const t_board *board)
+bool	has_live_players(const t_board *board)
 {
 	int	player_id;
 
@@ -76,26 +76,26 @@ bool	has_live_players(const t_session *session, const t_board *board)
 	while (player_id <= BOARD_CELLS)
 	{
 		if (board->players[player_id].team != 0
-			&& slot_is_live(session, player_id))
+			&& player_is_live(&board->players[player_id]))
 			return (true);
 		player_id++;
 	}
 	return (false);
 }
 
-void	reap_players(t_session *session)
+void	reap_players(t_board *board)
 {
 	int	player_id;
 
 	player_id = 1;
 	while (player_id <= BOARD_CELLS)
 	{
-		if (session->board->players[player_id].team != 0
-			&& !slot_is_live(session, player_id))
-			clear_player(session->board, player_id);
+		if (board->players[player_id].team != 0
+			&& !player_is_live(&board->players[player_id]))
+			clear_player(board, player_id);
 		player_id++;
 	}
-	record_winner(session->board);
+	record_winner(board);
 }
 
 void	leave_player(t_session *session, int player_id)

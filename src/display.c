@@ -57,7 +57,7 @@ int	show_board(const t_session *session)
 			return (perror("semop"), EXIT_FAILURE);
 		}
 		if (snapshot.phase != FINISHED && snapshot.count > 0
-			&& !has_live_players(session, &snapshot))
+			&& !has_live_players(&snapshot))
 		{
 			ft_bzero(snapshot.cells, sizeof(snapshot.cells));
 			snapshot.phase = FINISHED;
