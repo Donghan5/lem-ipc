@@ -41,18 +41,36 @@ static int	fail_creation(t_session *session)
 	return (-1);
 }
 
+/*
+** All three objects share one key, so whatever a crash leaves behind, at any
+** step of creation, is found again through that key. Called under the
+** directory lock with no live board, so nobody else can be using them.
+*/
+int	remove_keyed(t_session *session, key_t key)
+{
+	session->sem_id = -1;
+	session->queue_id = -1;
+	if (key != IPC_PRIVATE)
+	{
+		session->sem_id = semget(key, 0, 0600);
+		session->queue_id = msgget(key, 0600);
+	}
+	return (remove_session(session));
+}
+
 int	create_session(t_session *session, key_t key, int expected)
 {
 	t_semun	initial;
 
 	session->shm_id = -1;
-	session->queue_id = -1;
-	session->sem_id = semget(IPC_PRIVATE, 1, 0600);
+	if (remove_keyed(session, key) == -1)
+		return (-1);
+	session->sem_id = semget(key, 1, IPC_CREAT | IPC_EXCL | 0600);
 	initial.val = 1;
 	if (session->sem_id == -1 || semctl(session->sem_id, 0, SETVAL, initial)
 		== -1)
 		return (fail_creation(session));
-	session->queue_id = msgget(IPC_PRIVATE, 0600);
+	session->queue_id = msgget(key, IPC_CREAT | IPC_EXCL | 0600);
 	if (session->queue_id == -1)
 		return (fail_creation(session));
 	session->shm_id = shmget(key, sizeof(t_board), IPC_CREAT | IPC_EXCL

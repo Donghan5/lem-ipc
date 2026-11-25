@@ -72,6 +72,7 @@ int		open_session(t_session *session, int expected);
 int		close_session(t_session *session);
 int		create_session(t_session *session, key_t key, int expected);
 int		remove_session(t_session *session);
+int		remove_keyed(t_session *session, key_t key);
 int		lock_board(const t_session *session);
 int		unlock_board(const t_session *session);
 

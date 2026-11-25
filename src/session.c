@@ -22,14 +22,10 @@ static int	detach_session(t_session *session, int result)
 	return (result);
 }
 
-static int	discard_stale(t_session *session)
+/* The board's IDs may never have been written, so look them up by key. */
+static int	discard_stale(t_session *session, key_t key)
 {
-	if (session->board->expected == 0)
-	{
-		session->sem_id = -1;
-		session->queue_id = -1;
-	}
-	return (detach_session(session, remove_session(session)));
+	return (detach_session(session, remove_keyed(session, key)));
 }
 
 static int	open_existing(t_session *session, key_t key, int expected)
@@ -44,7 +40,7 @@ static int	open_existing(t_session *session, key_t key, int expected)
 		return (-1);
 	if (info.shm_nattch != 0)
 		return (0);
-	if (discard_stale(session) == -1)
+	if (discard_stale(session, key) == -1)
 		return (-1);
 	if (expected == 0)
 		return (errno = ENOENT, -1);

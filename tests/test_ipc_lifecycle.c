@@ -211,6 +211,63 @@ static void	test_removal(t_suite *s, t_session *session, key_t key,
 		semctl(session->sem_id, 0, IPC_RMID);
 }
 
+static bool	key_unused(key_t key)
+{
+	return (shmget(key, 0, 0600) == -1 && errno == ENOENT
+		&& semget(key, 0, 0600) == -1 && errno == ENOENT
+		&& msgget(key, 0600) == -1 && errno == ENOENT);
+}
+
+/*
+** What a session that crashed while being created leaves behind must be found
+** through the key and reclaimed: a semaphore and a queue whose board never
+** existed, or also a board whose creator died before recording their IDs.
+*/
+static void	test_orphans_reclaimed(t_suite *s, key_t key, bool with_board)
+{
+	t_session		session = {0};
+	struct msqid_ds	queue;
+	struct shmid_ds	memory;
+	int				sem_id;
+	int				queue_id;
+	int				shm_id;
+
+	sem_id = semget(key, 1, IPC_CREAT | IPC_EXCL | 0600);
+	queue_id = msgget(key, IPC_CREAT | IPC_EXCL | 0600);
+	shm_id = -1;
+	if (with_board)
+		shm_id = shmget(key, sizeof(t_board), IPC_CREAT | IPC_EXCL | 0600);
+	check(s, with_board ? "orphan_board_planted" : "orphans_planted",
+		sem_id >= 0 && queue_id >= 0 && (!with_board || shm_id >= 0), true);
+	check(s, "session_opens_over_orphans", open_session(&session, 3), 0);
+	check(s, "orphan_semaphore_reclaimed",
+		id_gone(semctl(sem_id, 0, GETVAL)), true);
+	check(s, "orphan_queue_reclaimed",
+		id_gone(msgctl(queue_id, IPC_STAT, &queue)), true);
+	if (with_board)
+		check(s, "orphan_board_reclaimed",
+			id_gone(shmctl(shm_id, IPC_STAT, &memory)), true);
+	check(s, "new_semaphore_and_queue_are_keyed",
+		semget(key, 0, 0600) == session.sem_id
+		&& msgget(key, 0600) == session.queue_id, true);
+	if (session.board != NULL)
+		check(s, "orphan_test_session_closed", close_session(&session), 0);
+	check(s, "key_fully_released", key_unused(key), true);
+	/* Clean up by ID even when the code under test leaked an object. */
+	if (semctl(sem_id, 0, GETVAL) >= 0)
+		semctl(sem_id, 0, IPC_RMID);
+	if (msgctl(queue_id, IPC_STAT, &queue) == 0)
+		msgctl(queue_id, IPC_RMID, NULL);
+	if (shm_id >= 0 && shmctl(shm_id, IPC_STAT, &memory) == 0)
+		shmctl(shm_id, IPC_RMID, NULL);
+	sem_id = semget(key, 0, 0600);
+	if (sem_id >= 0)
+		semctl(sem_id, 0, IPC_RMID);
+	queue_id = msgget(key, 0600);
+	if (queue_id >= 0)
+		msgctl(queue_id, IPC_RMID, NULL);
+}
+
 enum { RACE_PLAYERS = 4, RACE_TURNS = 100 };
 
 static bool	board_is_consistent(const t_board *board)
@@ -383,6 +440,8 @@ static void	test_lifecycle(t_suite *s)
 	if (result != -1 || errno != ENOENT)
 		return ;
 	test_concurrent_board(s, key);
+	test_orphans_reclaimed(s, key, false);
+	test_orphans_reclaimed(s, key, true);
 	for (cycle = 0; cycle < 3; cycle++)
 	{
 		result = open_session(&session, 3);
