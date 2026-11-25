@@ -27,9 +27,10 @@ SRCS = ${LIBC} ${ADDITIONAL}
 
 SRCSALL = ${LIBC} ${ADDITIONAL} ${BONUS}
 
-OBJS = ${SRCS:.c=.o}
+OBJ_DIR = ../obj/libft
+OBJS = $(addprefix $(OBJ_DIR)/,$(SRCS:.c=.o))
 
-OBJSALL = ${SRCSALL:.c=.o}
+OBJSALL = $(addprefix $(OBJ_DIR)/,$(SRCSALL:.c=.o))
 
 NAME = libft.a
 
@@ -41,7 +42,10 @@ CPPFLAGS = -I.
 
 .DEFAULT_GOAL := all
 
-%.o: %.c libft.h
+$(OBJ_DIR):
+	mkdir -p $@
+
+$(OBJ_DIR)/%.o: %.c libft.h | $(OBJ_DIR)
 	$(CC) $(CPPFLAGS) $(CFLAGS) -c $< -o $@
 
 $(NAME): $(OBJS)
@@ -59,7 +63,8 @@ all: $(NAME) printf
 
 clean:
 	$(MAKE) -C ft_printf clean
-	rm -f $(OBJSALL)
+	rm -f $(OBJSALL) $(SRCSALL:.c=.o)
+	@rmdir $(OBJ_DIR) ../obj 2>/dev/null || :
 
 fclean: clean
 	$(MAKE) -C ft_printf fclean
@@ -68,7 +73,7 @@ fclean: clean
 re: fclean
 	$(MAKE) all
 
-printf:
+printf: $(NAME)
 	$(MAKE) -C ft_printf
 
 .PHONY: all clean fclean re bonus printf

@@ -11,7 +11,6 @@
 /* ************************************************************************** */
 
 #include "ft_printf.h"
-#include "./libft/libft.h"
 
 static void	ptr_address(uintptr_t ptr, int *len)
 {

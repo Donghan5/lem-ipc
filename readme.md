@@ -26,7 +26,7 @@ make unit          # game rules and focused System V IPC tests
 make integration   # real processes and real System V IPC
 ```
 
-`make unit` links every object but `src/main.o`, so the suites call
+`make unit` links the core objects from `obj/src/` without `main.o`, so the suites call
 `is_surrounded`, `join_player`, `leave_player`, `move_player` and
 `choose_target` directly on a plain `t_board`. The movement suite checks
 forced moves and runs 400000 random move attempts before checking board
@@ -40,14 +40,19 @@ therefore means a new session. The harness waits for its own child processes
 and checks their exit codes. It records the IPC IDs from each match's board
 and removes any of those objects that survive the match.
 
-Two integration tests are marked `XFAIL` because they record known defects:
+The integration suite checks IPC cleanup after `SIGINT`, after a player is
+killed during a match, after the display exits last, and when a new run
+replaces a session whose last process was killed. When Valgrind is installed,
+it checks the first player in a normal match and the survivor in the
+in-progress `SIGKILL` test. The harness checks kernel IPC IDs separately.
+
+One integration test is marked `XFAIL` because it records a known defect:
 
 | Test | Defect |
 | --- | --- |
-| `ipc_cleanup_after_sigkill` | A player killed with SIGKILL never decrements `board->count`, so no survivor runs the cleanup and the shm, msgq and semaphore outlive the match |
 | `player_lines_never_garbled` | `ft_printf` issues one `write(2)` per byte, so players sharing a terminal interleave mid-word |
 
-The second test only reproduces when the players share one file descriptor and
+The defect only reproduces when the players share one file descriptor and
 start together. `TICK_MS` is one second, so players launched in lockstep print
 in the same instant on every tick and collide, while starting them half a
 second apart keeps their bursts from overlapping and hides the defect:
@@ -60,7 +65,7 @@ second apart keeps their bursts from overlapping and hides the defect:
 Starting every player at once is the documented way to run a match, so the
 test launches them that way.
 
-When either defect is fixed the suite prints `XPASS`; drop that test's
+When the defect is fixed the suite prints `XPASS`; drop that test's
 known-fail flag in `tests/run_integration.sh` at that point.
 
 Files under `tests/` are deliberately outside 42 Norm scope, since they are not
@@ -81,4 +86,17 @@ norminette src inc libft
 | `display.c` | Copy the board under lock and render the snapshot after unlocking |
 | `tests/` | Unit suites on a plain board, plus an integration suite over real IPC |
 
-The last departing player removes the IPC resources. If the remaining players are forcibly killed, for example with SIGKILL, the session can leave IPC resources behind.
+The last process attached to the board, including the display, removes the
+IPC resources when it exits through the normal cleanup path. If every
+attached process is killed after initialization, the next invocation in the
+same directory removes the abandoned session. A segment with an incompatible
+board size is rejected with `EINVAL`.
+
+During play, surviving players remove slots whose recorded PIDs no longer
+exist. A killed process can still appear to exist while it is a zombie, until
+its parent reaps it. The display checks its local snapshot and closes once all
+players recorded in that snapshot are gone.
+
+A `SIGKILL` during initialization can leave private IPC objects behind if it
+arrives before the shared segment is created or before its header is fully
+initialized. The next run cannot reliably identify those objects for cleanup.

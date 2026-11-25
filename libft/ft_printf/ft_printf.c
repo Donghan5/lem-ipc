@@ -11,7 +11,6 @@
 /* ************************************************************************** */
 
 #include "ft_printf.h"
-#include "./libft/libft.h"
 
 static int	format_printf(const char fmt, va_list ap)
 {

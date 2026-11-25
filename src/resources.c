@@ -5,15 +5,29 @@ typedef union u_semun
 	int	val;
 }	t_semun;
 
-void	remove_session(t_session *session)
+static bool	removal_failed(int result)
 {
-	if (session->shm_id >= 0 && shmctl(session->shm_id, IPC_RMID, NULL) == -1)
-		perror("shmctl");
-	if (session->queue_id >= 0 && msgctl(session->queue_id, IPC_RMID,
-			NULL) == -1)
-		perror("msgctl");
-	if (session->sem_id >= 0 && semctl(session->sem_id, 0, IPC_RMID) == -1)
-		perror("semctl");
+	return (result == -1 && errno != EINVAL && errno != EIDRM);
+}
+
+/* Keep the board discoverable until its queue and semaphore are gone. */
+int	remove_session(t_session *session)
+{
+	int	error;
+
+	error = 0;
+	if (session->queue_id >= 0
+		&& removal_failed(msgctl(session->queue_id, IPC_RMID, NULL)))
+		error = errno;
+	if (session->sem_id >= 0
+		&& removal_failed(semctl(session->sem_id, 0, IPC_RMID)) && !error)
+		error = errno;
+	if (error)
+		return (errno = error, -1);
+	if (session->shm_id >= 0
+		&& removal_failed(shmctl(session->shm_id, IPC_RMID, NULL)))
+		return (-1);
+	return (0);
 }
 
 static int	fail_creation(t_session *session)
@@ -21,7 +35,8 @@ static int	fail_creation(t_session *session)
 	int	saved_errno;
 
 	saved_errno = errno;
-	remove_session(session);
+	if (remove_session(session) == -1)
+		perror("remove_session");
 	errno = saved_errno;
 	return (-1);
 }

@@ -34,7 +34,7 @@ int	main(int argc, char **argv)
 		result = show_board(&session);
 	else
 		result = run_player(&session, team);
-	if (shmdt(session.board) == -1)
-		return (perror("shmdt"), EXIT_FAILURE);
+	if (close_session(&session) == -1)
+		return (perror("close_session"), EXIT_FAILURE);
 	return (result);
 }

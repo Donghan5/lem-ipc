@@ -315,7 +315,87 @@ test_cleanup_after_sigkill() {
 	collect_players 5
 	[ "$EXITS_OK" = 1 ] || survivor_ok=0
 	report "sigkill_scenario_completed" "$survivor_ok" 0 ""
-	check_cleanup "ipc_cleanup_after_sigkill" "$survivor_ok"
+	check_cleanup "ipc_cleanup_after_sigkill"
+}
+
+test_sigkill_during_match() {
+	local victim status winner=0
+	local runner=("$BIN")
+	if command -v valgrind >/dev/null; then
+		runner=(valgrind -q --leak-check=full
+			--errors-for-leak-kinds=definite,indirect,possible --error-exitcode=42 "$BIN")
+	fi
+	new_match
+	start_first survivor.log 2 "${runner[@]}" 1
+	launch victim.log 2 "$BIN" 2
+	victim=$PID
+	if wait_for_log ' moved$' victim.log && kill -KILL "$victim"; then
+		wait "$victim" 2>/dev/null
+		status=$?
+		if [ "$status" = 137 ]; then
+			PIDS=("${PIDS[0]}")
+			collect_players 10
+			grep -qx 'Team 1 wins' "$DIR/survivor.log" && winner=$EXITS_OK
+		fi
+	fi
+	if [ "${#PIDS[@]}" -gt 0 ]; then
+		signal_players KILL
+		collect_players 1
+	fi
+	report "sigkill_during_match_survivor_wins" "$winner" 0 ""
+	check_cleanup "ipc_cleanup_after_running_sigkill"
+}
+
+test_stale_session_replaced() {
+	local victim stale_ids replacement_ok=0
+	new_match
+	start_first stale.log 4 "$BIN" 1
+	victim=$PID
+	stale_ids=$IPC_IDS
+	if kill -KILL "$victim"; then
+		wait "$victim" 2>/dev/null
+		PIDS=()
+		IPC_IDS=
+		start_first replacement.log 3 "$BIN" 2
+		if grep -qx 'Player 1 joined team 2' "$DIR/replacement.log" \
+			&& [ -n "$stale_ids" ] && [ -n "$IPC_IDS" ] && [ "$stale_ids" != "$IPC_IDS" ]; then
+			replacement_ok=1
+		fi
+	fi
+	report "stale_session_replaced" "$replacement_ok" 0 ""
+	local replacement_ids=$IPC_IDS
+	IPC_IDS=$stale_ids
+	check_cleanup "stale_session_ipcs_removed"
+	IPC_IDS=$replacement_ids
+	signal_players INT
+	collect_players 5
+	check_cleanup "replacement_session_ipcs_removed"
+}
+
+test_display_closes_last() {
+	local player shm queue sem attached=0 closed=0
+	new_match
+	start_first display-player.log 4 "$BIN" 1
+	player=$PID
+	launch last-display.log 4 "$BIN" 0
+	if wait_for_log 'Waiting for players' last-display.log; then
+		read -r shm queue sem <<< "$IPC_IDS"
+		if "$PROBE" shm "$shm" && "$PROBE" queue "$queue" \
+			&& "$PROBE" sem "$sem"; then
+			attached=1
+		fi
+	fi
+	if kill -KILL "$player"; then
+		wait "$player" 2>/dev/null
+		if [ "$?" = 137 ]; then
+			PIDS=("$PID")
+		fi
+	fi
+	collect_players 5
+	grep -qx 'Session closed.' "$DIR/last-display.log" && closed=$EXITS_OK
+	report "display_renders_while_player_is_attached" "$attached" 0 ""
+	report "last_display_exits_after_player_sigkill" "$closed" 0 ""
+	check_cleanup "ipc_cleanup_after_last_display"
 }
 
 test_output_not_garbled() {
@@ -374,6 +454,9 @@ test_simultaneous_launch
 test_display_renders_grid
 test_stress_20_players
 test_cleanup_after_sigkill
+test_sigkill_during_match
+test_stale_session_replaced
+test_display_closes_last
 test_output_not_garbled
 test_valgrind_match
 

@@ -20,7 +20,7 @@
 # include <stddef.h>
 # include <string.h>
 # include <stdint.h>
-# include "./libft/libft.h"
+# include "../libft.h"
 
 int		ft_printf(const char *fmt, ...);
 int		ft_putstr(const char *s);

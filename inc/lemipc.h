@@ -31,9 +31,10 @@ typedef enum e_phase
 
 typedef struct s_player
 {
-	int	team;
-	int	cell;
-	int	previous;
+	int		team;
+	int		cell;
+	int		previous;
+	pid_t	pid;
 }	t_player;
 
 typedef struct s_board
@@ -66,14 +67,17 @@ typedef struct s_target
 }	t_target;
 
 int		open_session(t_session *session, int expected);
+int		close_session(t_session *session);
 int		create_session(t_session *session, key_t key, int expected);
-void	remove_session(t_session *session);
+int		remove_session(t_session *session);
 int		lock_board(const t_session *session);
 int		unlock_board(const t_session *session);
 
 int		run_player(t_session *session, int team);
 int		join_player(t_board *board, int team);
 void	leave_player(t_session *session, int player_id);
+void	reap_players(t_board *board);
+bool	has_live_players(const t_board *board);
 bool	is_surrounded(const t_board *board, int player_id);
 bool	move_player(t_board *board, int player_id, int target_cell);
 void	choose_target(const t_board *board, int team, t_target *target);

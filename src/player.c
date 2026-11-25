@@ -30,6 +30,7 @@ static int	play_match(t_session *session, int player_id, int team)
 	ft_bzero(&target, sizeof(target));
 	while (lock_board(session) == 0)
 	{
+		reap_players(session->board);
 		eliminated = session->board->phase == RUNNING
 			&& is_surrounded(session->board, player_id);
 		if (stop_requested() || eliminated || session->board->phase == FINISHED)
@@ -57,6 +58,7 @@ int	run_player(t_session *session, int team)
 
 	if (lock_board(session) == -1)
 		return (perror("semop"), EXIT_FAILURE);
+	reap_players(session->board);
 	player_id = join_player(session->board, team);
 	if (unlock_board(session) == -1)
 		return (perror("semop"), EXIT_FAILURE);

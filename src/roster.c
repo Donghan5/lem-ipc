@@ -45,7 +45,7 @@ int	join_player(t_board *board, int team)
 	while (board->cells[cell] != 0)
 		cell = (cell + 1) % BOARD_CELLS;
 	player = &board->players[player_id];
-	*player = (t_player){team, cell, -1};
+	*player = (t_player){team, cell, -1, getpid()};
 	board->cells[cell] = player_id;
 	board->team_count[team]++;
 	board->count++;
@@ -57,23 +57,63 @@ int	join_player(t_board *board, int team)
 	return (player_id);
 }
 
-void	leave_player(t_session *session, int player_id)
+static void	clear_player(t_board *board, int player_id)
 {
-	t_board		*board;
 	t_player	*player;
 
-	board = session->board;
 	player = &board->players[player_id];
 	board->cells[player->cell] = 0;
 	board->team_count[player->team]--;
-	player->team = 0;
+	ft_bzero(player, sizeof(*player));
 	board->count--;
+}
+
+static bool	player_has_exited(const t_player *player)
+{
+	return (player->pid > 0 && kill(player->pid, 0) == -1 && errno == ESRCH);
+}
+
+bool	has_live_players(const t_board *board)
+{
+	int				player_id;
+	const t_player	*player;
+
+	player_id = 1;
+	while (player_id <= BOARD_CELLS)
+	{
+		player = &board->players[player_id];
+		if (player->team != 0 && !player_has_exited(player))
+			return (true);
+		player_id++;
+	}
+	return (false);
+}
+
+void	reap_players(t_board *board)
+{
+	int			player_id;
+	t_player	*player;
+
+	player_id = 1;
+	while (player_id <= BOARD_CELLS)
+	{
+		player = &board->players[player_id];
+		if (player->team != 0 && player_has_exited(player))
+			clear_player(board, player_id);
+		player_id++;
+	}
+	record_winner(board);
+}
+
+void	leave_player(t_session *session, int player_id)
+{
+	t_board	*board;
+
+	board = session->board;
+	clear_player(board, player_id);
 	record_winner(board);
 	if (board->count == 0)
-	{
 		board->phase = FINISHED;
-		remove_session(session);
-	}
-	else if (unlock_board(session) == -1)
+	if (unlock_board(session) == -1)
 		perror("semop");
 }
