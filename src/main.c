@@ -8,6 +8,20 @@ static int	print_usage(const char *program)
 	return (EXIT_FAILURE);
 }
 
+static int	open_client_session(t_session *session, int expected)
+{
+	if (install_signals() == -1)
+		perror("lemipc");
+	else if (open_session(session, expected) == 0)
+		return (EXIT_SUCCESS);
+	else if (expected == 0 && errno == ENOENT)
+		ft_putendl_fd("lemipc: No active game session in this directory. "
+			"Start a player first.", STDERR_FILENO);
+	else
+		perror("lemipc");
+	return (EXIT_FAILURE);
+}
+
 int	main(int argc, char **argv)
 {
 	t_session	session;
@@ -24,11 +38,8 @@ int	main(int argc, char **argv)
 		expected = read_player_count();
 	if (expected < 0)
 		return (EXIT_FAILURE);
-	if (install_signals() == -1 || open_session(&session, expected) == -1)
-	{
-		perror("lemipc");
+	if (open_client_session(&session, expected) != EXIT_SUCCESS)
 		return (EXIT_FAILURE);
-	}
 	srand((unsigned int)getpid());
 	if (team == 0)
 		result = show_board(&session);
