@@ -40,6 +40,12 @@ session in that directory before starting the demo.
 
 A player is eliminated when at least two adjacent players belong to the same opposing team, and diagonals count.
 
+To demonstrate recovery after a player is killed, run `make demo-kill` in the
+right terminal and open the same board on the left. Press Enter to start the
+match, then press Enter again at the SIGKILL prompt to kill the indicated
+Team 2 player. Watch the remaining players on the left. The right terminal
+reports the winner and checks that the session's three IPC IDs are gone.
+
 ## Tests
 
 ```sh

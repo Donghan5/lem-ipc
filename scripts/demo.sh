@@ -5,6 +5,7 @@ cd -- "$ROOT" || exit 1
 BIN=./lemipc
 PROBE="$ROOT/tests/ipc_probe"
 team_count="${1:-2}"
+mode="${2:-}"
 if [[ ! $team_count =~ ^[2-7]$ ]]; then
 	printf 'Demo: team count must be between 2 and 7.\n' >&2
 	exit 1
@@ -138,6 +139,58 @@ show_msgq_activity() {
 	fi
 }
 
+kill_demo_player() {
+	local deadline=$((SECONDS + 5)) index pid player status
+	while ! grep -qsE '^Player [0-9]+ \(team [12]\) moved$' "${logs[@]}"; do
+		[ "$SECONDS" -lt "$deadline" ] || fail "No player moved before the SIGKILL demonstration."
+		sleep 0.05
+	done
+	for index in 2 3; do
+		pid="${pids[$index]}"
+		if grep -qx "$pid" <<< "$(active_players)"; then
+			break
+		fi
+		pid=
+	done
+	[ -n "$pid" ] || fail "No Team 2 player is still running."
+	read -r _ player _ <"${logs[$index]}"
+	printf 'Press Enter to send SIGKILL to Player %s (Team 2, PID %s). Watch the board on the left.\n' "$player" "$pid"
+	if ! IFS= read -r -t 20; then
+		fail "No confirmation received for SIGKILL."
+	fi
+	grep -qx "$pid" <<< "$(active_players)" && kill -KILL "$pid" 2>/dev/null \
+		|| fail "Player $player exited before SIGKILL."
+	wait "$pid" 2>/dev/null
+	status=$?
+	unset 'pids[index]'
+	[ "$status" = 137 ] || fail "Player $player exited with status $status instead of SIGKILL."
+	printf 'Player %s (Team 2) exited by SIGKILL. Watch the survivors on the board.\n' "$player"
+}
+
+check_kill_demo_cleanup() {
+	local deadline=$((SECONDS + 5)) shm queue sem kind id status remaining
+	read -r shm queue sem _ <<< "$session_ids"
+	while :; do
+		remaining=()
+		for kind in shm sem queue; do
+			case "$kind" in
+				shm) id="$shm" ;;
+				sem) id="$sem" ;;
+				queue) id="$queue" ;;
+			esac
+			"$PROBE" "$kind" "$id"
+			status=$?
+			[ "$status" = 1 ] || remaining+=("$kind=$id")
+		done
+		if [ "${#remaining[@]}" = 0 ]; then
+			printf 'IPC cleanup PASS: SHM %s, SEM %s and MSGQ %s are gone.\n' "$shm" "$sem" "$queue"
+			return
+		fi
+		[ "$SECONDS" -lt "$deadline" ] || fail "IPC cleanup could not be confirmed: ${remaining[*]}."
+		sleep 0.1
+	done
+}
+
 finish_match() {
 	local deadline=$((SECONDS + 120)) pid status winner failed=0
 	while [ -n "$(active_players)" ]; do
@@ -201,4 +254,10 @@ for ((team = 2; team <= team_count; team++)); do
 	start_player "$team"
 done
 printf 'All %d players have joined. The match has started.\n' "$player_count"
+if [ "$mode" = --kill-player ]; then
+	kill_demo_player
+fi
 finish_match
+if [ "$mode" = --kill-player ]; then
+	check_kill_demo_cleanup
+fi

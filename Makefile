@@ -90,6 +90,9 @@ test: unit integration ## Run unit + integration (about 2 minutes)
 demo: $(NAME) $(IPC_PROBE) ## Run the two-terminal demo with two teams
 	@./scripts/demo.sh
 
+demo-kill: $(NAME) $(IPC_PROBE) ## Show recovery after SIGKILL in a two-terminal demo
+	@./scripts/demo.sh 2 --kill-player
+
 demo3: ## Run the two-terminal demo with three teams
 demo4: ## Run the two-terminal demo with four teams
 demo5: ## Run the two-terminal demo with five teams
@@ -125,4 +128,4 @@ re: fclean ## Rebuild from scratch
 
 FORCE:
 
-.PHONY: all clean fclean re test unit ipc-test integration stress eval eval-list demo $(MULTI_TEAM_DEMOS) play ipcs help FORCE
+.PHONY: all clean fclean re test unit ipc-test integration stress eval eval-list demo demo-kill $(MULTI_TEAM_DEMOS) play ipcs help FORCE
