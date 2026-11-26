@@ -4,6 +4,17 @@ ROOT="$(cd -- "$(dirname -- "$0")/.." && pwd -P)" || exit 1
 cd -- "$ROOT" || exit 1
 BIN=./lemipc
 PROBE="$ROOT/tests/ipc_probe"
+team_count="${1:-2}"
+if [[ ! $team_count =~ ^[2-7]$ ]]; then
+	printf 'Demo: team count must be between 2 and 7.\n' >&2
+	exit 1
+fi
+player_count=$((team_count * 2))
+matchup=2
+for ((team = 2; team <= team_count; team++)); do
+	matchup+=' vs 2'
+done
+winner_pattern="^Team [1-$team_count] wins$"
 LOG_DIR="$(mktemp -d /tmp/lemipc-demo.XXXXXX)" || exit 1
 pids=()
 logs=()
@@ -11,6 +22,8 @@ eliminated=()
 interrupted=0
 starting_player=0
 display_invited=0
+msgq_sent=0
+msgq_received=0
 
 active_players() {
 	jobs -pr
@@ -79,7 +92,7 @@ start_player() {
 	log="$LOG_DIR/player-$number.log"
 	logs+=("$log")
 	starting_player=1
-	LEMIPC_PLAYERS=4 "$BIN" "$team" >"$log" 2>&1 &
+	LEMIPC_PLAYERS="$player_count" "$BIN" "$team" >"$log" 2>&1 &
 	pid=$!
 	pids+=("$pid")
 	starting_player=0
@@ -110,15 +123,34 @@ show_eliminations() {
 	done
 }
 
+show_msgq_activity() {
+	local snapshot sender receiver
+	[[ $msgq_sent == 1 && $msgq_received == 1 ]] && return
+	snapshot="$(awk -v id="$queue_id" '$2 == id { print $6, $7; exit }' /proc/sysvipc/msg)"
+	read -r sender receiver <<< "$snapshot"
+	if [[ $msgq_sent == 0 && -n $sender && " ${pids[*]} " == *" $sender "* ]]; then
+		printf 'MSGQ %s: successful send observed (player PID %s).\n' "$queue_id" "$sender"
+		msgq_sent=1
+	fi
+	if [[ $msgq_received == 0 && -n $receiver && " ${pids[*]} " == *" $receiver "* ]]; then
+		printf 'MSGQ %s: successful receive observed (player PID %s).\n' "$queue_id" "$receiver"
+		msgq_received=1
+	fi
+}
+
 finish_match() {
 	local deadline=$((SECONDS + 120)) pid status winner failed=0
 	while [ -n "$(active_players)" ]; do
 		check_interrupt
 		show_eliminations
+		show_msgq_activity
 		[ "$SECONDS" -lt "$deadline" ] || fail "Match timed out after 120 seconds."
 		sleep 0.2
 	done
 	check_interrupt
+	show_msgq_activity
+	[ "$msgq_sent" = 1 ] || printf 'MSGQ %s: no send observed.\n' "$queue_id"
+	[ "$msgq_received" = 1 ] || printf 'MSGQ %s: no receive observed.\n' "$queue_id"
 	for pid in "${pids[@]}"; do
 		wait "$pid"
 		status=$?
@@ -129,8 +161,8 @@ finish_match() {
 	done
 	pids=()
 	show_eliminations
-	winner="$(grep -hE '^Team [12] wins$' "${logs[@]}" | sort -u)"
-	if [ "$failed" = 1 ] || [[ ! $winner =~ ^Team\ [12]\ wins$ ]]; then
+	winner="$(grep -hE "$winner_pattern" "${logs[@]}" | sort -u)"
+	if [ "$failed" = 1 ] || [[ ! $winner =~ $winner_pattern ]]; then
 		fail "The match did not finish cleanly with one confirmed winner."
 	fi
 	printf '%s.\n' "$winner"
@@ -144,13 +176,15 @@ trap 'handle_interrupt 129' HUP
 check_session_key || fail "Could not confirm an unused IPC key for $ROOT. Close any existing session before running the demo."
 start_player 1
 session_ids="$("$PROBE")" || fail "Could not inspect the new session."
-read -r _ _ _ creator <<< "$session_ids"
+read -r _ queue_id _ creator <<< "$session_ids"
 [ "$creator" = "${pids[0]}" ] || fail "The joined session was created by another process."
+[[ $queue_id =~ ^[0-9]+$ ]] || fail "Could not identify the session's message queue."
+printf 'MSGQ %s ready. Inspect it with: ipcs -q -i %s\n' "$queue_id" "$queue_id"
 
 printf '\nIn the left terminal, run this command:\n'
 printf '    cd %q && ./lemipc 0\n\n' "$ROOT"
 display_invited=1
-printf 'Press Enter when the board is visible to start the 2 vs 2 match.\n'
+printf 'Press Enter when the board is visible to start the %s match.\n' "$matchup"
 if ! IFS= read -r; then
 	check_interrupt
 	fail "Input closed before the match started."
@@ -162,7 +196,9 @@ if ! grep -qx "${pids[0]}" <<< "$(active_players)" \
 fi
 
 start_player 1
-start_player 2
-start_player 2
-printf 'All four players have joined. The match has started.\n'
+for ((team = 2; team <= team_count; team++)); do
+	start_player "$team"
+	start_player "$team"
+done
+printf 'All %d players have joined. The match has started.\n' "$player_count"
 finish_match

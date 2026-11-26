@@ -20,13 +20,20 @@ Players check for elimination before each turn. They move one tile up, down, lef
 
 ## Two-terminal demo
 
-1. In the right terminal, run `make demo` from the repository.
+1. In the right terminal, run `make demo` from the repository for two teams.
+   Use `make demo3`, `make demo4`, `make demo5`, `make demo6`, or `make demo7`
+   for three to seven teams. Each team has two players.
 2. In the left terminal, run `./lemipc 0` from the same repository directory,
    or paste the full command printed by the demo.
-3. When the board shows `Waiting for players (1/4)`, press Enter in the right
-   terminal to start the 2 vs 2 match. Watch the board on the left and the
+3. When the board shows one player waiting, press Enter in the right terminal
+   to launch the remaining players. Watch the board on the left and the
    joins, eliminations, and winner on the right. Press Ctrl-C in the left
    terminal to close the board when you finish.
+
+The right terminal also prints the session's message queue ID and reports
+when the kernel records a successful send and receive by demo players.
+For a separate check of team-specific target messages, run
+`make tests/test_ipc && ./tests/test_ipc`.
 
 The demo uses the repository directory for its game session. Close any existing
 session in that directory before starting the demo.
