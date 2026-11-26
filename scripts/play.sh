@@ -10,9 +10,11 @@ LOGS=logs
 teams=("$@")
 [ "${#teams[@]}" -gt 0 ] || teams=(1 1 2 2)
 
+# Range checks belong to ./lemipc (parse_team); a rejected team is caught
+# after launch. Only 0 is refused here: it opens the display, not a player.
 for team in "${teams[@]}"; do
-	if ! [[ "$team" =~ ^[1-9][0-9]{0,8}$ ]]; then
-		echo "play: teams are positive numbers, got '$team'" >&2
+	if [[ "$team" =~ ^0+$ ]]; then
+		echo "play: 0 opens the display, it is not a team" >&2
 		exit 1
 	fi
 done
@@ -52,18 +54,53 @@ step 1 "Before the game"
 step 2 "Launching ${#teams[@]} players (teams: ${teams[*]})"
 echo "    Each player is its own ./lemipc process; nothing forks."
 echo "    LEMIPC_PLAYERS=${#teams[@]}: the match starts once everyone has joined."
+# Logs are named by launch order only: the team string is whatever the user
+# typed, and ./lemipc accepts ids far longer than a file name may be.
+log_of() {
+	printf '%s/player-%d.log' "$LOGS" "$(($1 + 1))"
+}
+
 for index in "${!teams[@]}"; do
-	log="$LOGS/player-$((index + 1))-team-${teams[$index]}.log"
+	log="$(log_of "$index")"
 	"$BIN" "${teams[$index]}" >"$log" 2>&1 &
 	pids+=("$!")
-	echo "    pid $! -> ./lemipc ${teams[$index]}   (output: $log)"
+	echo "    pid $! -> ./lemipc '${teams[$index]}'   (output: $log)"
 done
 
-# The display never creates the session, so let a player create it first.
-for _ in $(seq 50); do
-	grep -qs ' joined team ' "$LOGS"/player-*.log && break
+# Wait until every player has joined or ./lemipc has rejected one. A missing
+# player would leave the others waiting forever for the roster, so stop them.
+# 400 players take about 30s to join, so allow 5s plus 0.1s per player.
+rejected=()
+joined=0
+deadline=$((SECONDS + 5 + ${#teams[@]} / 10))
+while [ "$SECONDS" -lt "$deadline" ]; do
+	joined=0
+	rejected=()
+	for index in "${!teams[@]}"; do
+		log="$(log_of "$index")"
+		if grep -qs '^Usage: ' "$log"; then
+			rejected+=("$index")
+		elif grep -qs ' joined team ' "$log"; then
+			joined=$((joined + 1))
+		fi
+	done
+	[ "${#rejected[@]}" -eq 0 ] && [ "$joined" -lt "${#teams[@]}" ] || break
 	sleep 0.1
 done
+if [ "${#rejected[@]}" -gt 0 ]; then
+	for index in "${rejected[@]}"; do
+		echo "play: ./lemipc rejected team '${teams[$index]}':" >&2
+		sed 's/^/    /' "$(log_of "$index")" >&2
+	done
+fi
+if [ "${#rejected[@]}" -gt 0 ] || [ "$joined" -lt "${#teams[@]}" ]; then
+	[ "${#rejected[@]}" -gt 0 ] \
+		|| echo "play: only $joined of ${#teams[@]} players joined in time" >&2
+	echo "play: asking the other players to leave" >&2
+	stop_players
+	./scripts/ipcs.sh | sed 's/^/    /'
+	exit 1
+fi
 
 step 3 "The first player created the shared resources"
 ./scripts/ipcs.sh | sed 's/^/    /'
