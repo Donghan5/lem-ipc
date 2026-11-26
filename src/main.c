@@ -4,7 +4,8 @@ static int	print_usage(const char *program)
 {
 	ft_putstr_fd("Usage: ", STDERR_FILENO);
 	ft_putstr_fd((char *)program, STDERR_FILENO);
-	ft_putendl_fd(" [0-7] (0 displays the board)", STDERR_FILENO);
+	ft_putendl_fd(" <team> (a positive team number; 0 displays the board)",
+		STDERR_FILENO);
 	return (EXIT_FAILURE);
 }
 
@@ -29,10 +30,11 @@ int	main(int argc, char **argv)
 	int			expected;
 	int			result;
 
-	if (argc != 2 || ft_strlen(argv[1]) != 1
-		|| argv[1][0] < '0' || argv[1][0] > '0' + TEAM_COUNT)
+	team = -1;
+	if (argc == 2)
+		team = parse_team(argv[1]);
+	if (team < 0)
 		return (print_usage(argv[0]));
-	team = argv[1][0] - '0';
 	expected = 0;
 	if (team != 0)
 		expected = read_player_count();

@@ -47,6 +47,26 @@ static void	test_rejected_values(t_suite *s)
 	check(s, "reject_plus", count_for("+4"), -1);
 }
 
+/* FAQ: "No specific limit, the same applies for the number of teams". */
+static void	test_team_args(t_suite *s)
+{
+	check(s, "team_zero_is_display", parse_team("0"), 0);
+	check(s, "team_one", parse_team("1"), 1);
+	check(s, "team_eight_accepted", parse_team("8"), 8);
+	check(s, "team_42_accepted", parse_team("42"), 42);
+	check(s, "team_1000_accepted", parse_team("1000"), 1000);
+	check(s, "team_int_max_accepted", parse_team("2147483647"), 2147483647);
+	check(s, "team_reject_overflow", parse_team("2147483648"), -1);
+	check(s, "team_reject_long_overflow", parse_team("99999999999999999999"),
+		-1);
+	check(s, "team_reject_empty", parse_team(""), -1);
+	check(s, "team_reject_negative", parse_team("-1"), -1);
+	check(s, "team_reject_plus", parse_team("+1"), -1);
+	check(s, "team_reject_space", parse_team(" 1"), -1);
+	check(s, "team_reject_letters", parse_team("a"), -1);
+	check(s, "team_reject_trailing_garbage", parse_team("1a"), -1);
+}
+
 int	main(void)
 {
 	t_suite	s;
@@ -55,5 +75,6 @@ int	main(void)
 	suite_start(&s, "config: LEMIPC_PLAYERS parsing");
 	test_valid_values(&s);
 	test_rejected_values(&s);
+	test_team_args(&s);
 	return (suite_end(&s));
 }

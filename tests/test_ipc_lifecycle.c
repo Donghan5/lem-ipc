@@ -293,7 +293,6 @@ enum { RACE_PLAYERS = 4, RACE_TURNS = 100 };
 
 static bool	board_is_consistent(const t_board *board)
 {
-	int	teams[TEAM_COUNT + 1] = {0};
 	int	count = 0;
 
 	for (int id = 1; id <= BOARD_CELLS; id++)
@@ -302,11 +301,10 @@ static bool	board_is_consistent(const t_board *board)
 
 		if (player->team == 0)
 			continue ;
-		if (player->team < 1 || player->team > TEAM_COUNT || player->pid <= 0
+		if (player->team < 1 || player->pid <= 0
 			|| player->cell < 0 || player->cell >= BOARD_CELLS
 			|| board->cells[player->cell] != id)
 			return (false);
-		teams[player->team]++;
 		count++;
 	}
 	for (int cell = 0; cell < BOARD_CELLS; cell++)
@@ -317,9 +315,6 @@ static bool	board_is_consistent(const t_board *board)
 				|| board->players[id].team == 0 || board->players[id].cell != cell))
 			return (false);
 	}
-	for (int team = 0; team <= TEAM_COUNT; team++)
-		if (teams[team] != board->team_count[team])
-			return (false);
 	return (count == board->count && count <= board->expected);
 }
 

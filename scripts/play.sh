@@ -11,8 +11,8 @@ teams=("$@")
 [ "${#teams[@]}" -gt 0 ] || teams=(1 1 2 2)
 
 for team in "${teams[@]}"; do
-	if ! [[ "$team" =~ ^[1-7]$ ]]; then
-		echo "play: teams are 1-7, got '$team'" >&2
+	if ! [[ "$team" =~ ^[1-9][0-9]{0,8}$ ]]; then
+		echo "play: teams are positive numbers, got '$team'" >&2
 		exit 1
 	fi
 done

@@ -1,21 +1,21 @@
 #include "lemipc.h"
 
+/* Team ids are unbounded, so read the teams off the roster itself. */
 static int	find_remaining_team(const t_board *board)
 {
+	int	player_id;
 	int	team;
 	int	remaining;
 
-	team = 1;
+	player_id = 1;
 	remaining = 0;
-	while (team <= TEAM_COUNT)
+	while (player_id <= BOARD_CELLS)
 	{
-		if (board->team_count[team] > 0)
-		{
-			if (remaining != 0)
-				return (0);
+		team = board->players[player_id++].team;
+		if (team != 0 && remaining != 0 && team != remaining)
+			return (0);
+		if (team != 0)
 			remaining = team;
-		}
-		team++;
 	}
 	return (remaining);
 }
@@ -47,7 +47,6 @@ int	join_player(t_board *board, int team)
 	player = &board->players[player_id];
 	*player = (t_player){team, cell, -1, getpid(), process_start(getpid())};
 	board->cells[cell] = player_id;
-	board->team_count[team]++;
 	board->count++;
 	if (board->count == board->expected)
 	{
@@ -63,7 +62,6 @@ static void	clear_player(t_board *board, int player_id)
 
 	player = &board->players[player_id];
 	board->cells[player->cell] = 0;
-	board->team_count[player->team]--;
 	ft_bzero(player, sizeof(*player));
 	board->count--;
 }

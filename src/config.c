@@ -38,6 +38,21 @@ void	wait_ms(long milliseconds)
 		nanosleep(&delay, NULL);
 }
 
+/* A team is any id from 1 to INT_MAX; 0 opens the display. -1 if invalid. */
+int	parse_team(const char *arg)
+{
+	long long	team;
+
+	if (!ft_isdigit(*arg))
+		return (-1);
+	team = 0;
+	while (ft_isdigit(*arg) && team <= INT_MAX)
+		team = team * 10 + (*arg++ - '0');
+	if (*arg != '\0' || team > INT_MAX)
+		return (-1);
+	return ((int)team);
+}
+
 int	read_player_count(void)
 {
 	const char	*value;

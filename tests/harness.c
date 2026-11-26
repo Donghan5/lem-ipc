@@ -54,13 +54,24 @@ void	board_put(t_board *board, int id, int team, int cell)
 	board->players[id].cell = cell;
 	board->players[id].previous = -1;
 	board->cells[cell] = id;
-	board->team_count[team]++;
 	board->count++;
 }
 
 int	cell_of(int row, int column)
 {
 	return (row * BOARD_SIZE + column);
+}
+
+int	team_size(const t_board *board, int team)
+{
+	int	player_id;
+	int	size;
+
+	player_id = 1;
+	size = 0;
+	while (player_id <= BOARD_CELLS)
+		size += (board->players[player_id++].team == team);
+	return (size);
 }
 
 int	make_test_semaphore(void)

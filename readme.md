@@ -14,7 +14,7 @@ LEMIPC_PLAYERS=3 ./lemipc 1 &
 wait
 ```
 
-Start the first command and wait for its join message before starting the others when using a custom roster size. With the default roster size, launch four players. Arguments `1` through `7` select a team. Argument `0` opens a terminal view of an existing session. Use Ctrl-C to close the display or withdraw a player running in the foreground.
+Start the first command and wait for its join message before starting the others when using a custom roster size. With the default roster size, launch four players. Any positive number selects a team (there is no fixed limit on teams); teams 1-9 draw one character per tile and larger ids widen every tile. Argument `0` opens a terminal view of an existing session. Use Ctrl-C to close the display or withdraw a player running in the foreground.
 
 Players check for elimination before each turn. They move one tile up, down, left, or right when a legal move is available, with one second between turns. A player is eliminated when two or more adjacent players belong to the same opposing team. Diagonal neighbors count for elimination. Teammates exchange target coordinates, and the last team remaining wins.
 

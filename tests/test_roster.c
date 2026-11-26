@@ -12,8 +12,8 @@ static void	test_join(t_suite *s)
 	check(s, "join_over_roster_refused", join_player(&b, 2), 0);
 	check(s, "phase_running_when_full", b.phase == RUNNING, true);
 	check(s, "count_matches_roster", b.count, 3);
-	check(s, "team_one_counted", b.team_count[1], 2);
-	check(s, "team_two_counted", b.team_count[2], 1);
+	check(s, "team_one_counted", team_size(&b, 1), 2);
+	check(s, "team_two_counted", team_size(&b, 2), 1);
 	check(s, "cells_are_distinct", b.players[1].cell != b.players[2].cell
 		&& b.players[2].cell != b.players[3].cell
 		&& b.players[1].cell != b.players[3].cell, true);
@@ -58,7 +58,7 @@ static void	test_leave_and_winner(t_suite *s)
 	check(s, "count_after_leave", b.count, 2);
 	check(s, "tile_freed_on_leave", b.cells[b.players[3].cell], 0);
 	check(s, "slot_freed_on_leave", b.players[3].team, 0);
-	check(s, "team_count_decremented", b.team_count[2], 0);
+	check(s, "team_count_decremented", team_size(&b, 2), 0);
 	check(s, "winner_is_last_team", b.winner, 1);
 	check(s, "phase_finished_on_win", b.phase == FINISHED, true);
 	semctl(session.sem_id, 0, IPC_RMID);
@@ -99,12 +99,35 @@ static void	test_one_team_wins_at_capacity(t_suite *s)
 	t_board	b;
 
 	board_reset(&b, 2);
-	join_player(&b, TEAM_COUNT);
+	join_player(&b, 7);
 	check(s, "one_team_waits_before_capacity", b.phase, WAITING);
 	check(s, "no_winner_before_capacity", b.winner, 0);
-	check(s, "last_teammate_joins", join_player(&b, TEAM_COUNT), 2);
+	check(s, "last_teammate_joins", join_player(&b, 7), 2);
 	check(s, "one_team_finishes_at_capacity", b.phase, FINISHED);
-	check(s, "highest_team_id_wins", b.winner, TEAM_COUNT);
+	check(s, "team_7_wins", b.winner, 7);
+}
+
+/* Team ids above the old 1-7 range join, count and win like any other. */
+static void	test_large_team_ids(t_suite *s)
+{
+	t_board	b;
+
+	board_reset(&b, 3);
+	check(s, "team_8_joins", join_player(&b, 8), 1);
+	check(s, "team_1000_joins", join_player(&b, 1000), 2);
+	check(s, "team_1000_second_joins", join_player(&b, 1000), 3);
+	check(s, "large_teams_start_running", b.phase, RUNNING);
+	check(s, "team_8_size", team_size(&b, 8), 1);
+	check(s, "team_1000_size", team_size(&b, 1000), 2);
+	check(s, "no_winner_with_large_teams", b.winner, 0);
+	b.players[1].started++;
+	reap_players(&b);
+	check(s, "team_1000_wins", b.winner, 1000);
+	check(s, "large_team_win_finishes", b.phase, FINISHED);
+	board_reset(&b, 2);
+	join_player(&b, 2147483647);
+	join_player(&b, 2147483647);
+	check(s, "int_max_team_wins_alone", b.winner, 2147483647);
 }
 
 /*
@@ -202,6 +225,7 @@ int	main(void)
 	test_leave_and_winner(&s);
 	test_waiting_slot_reused(&s);
 	test_one_team_wins_at_capacity(&s);
+	test_large_team_ids(&s);
 	test_reap_zombie(&s);
 	test_full_board(&s);
 	return (suite_end(&s));

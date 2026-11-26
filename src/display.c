@@ -1,21 +1,66 @@
 #include "lemipc.h"
 
+/* Widest team id on the board; INT_MAX has 10 digits. */
+static int	tile_width(const t_board *board)
+{
+	int	cell;
+	int	team;
+	int	digits;
+	int	width;
+
+	cell = 0;
+	width = 1;
+	while (cell < BOARD_CELLS)
+	{
+		team = board->players[board->cells[cell++]].team;
+		digits = 1;
+		while (team >= 10)
+		{
+			team /= 10;
+			digits++;
+		}
+		if (digits > width)
+			width = digits;
+	}
+	return (width);
+}
+
+/* Right-align one tile; wide tiles are space-separated so ids stay legible. */
+static int	put_tile(char *frame, int team, int width, bool first)
+{
+	int	length;
+	int	index;
+
+	length = 0;
+	if (width > 1 && !first)
+		frame[length++] = ' ';
+	index = length + width;
+	ft_memset(frame + length, ' ', width);
+	frame[index - 1] = '.';
+	while (team != 0)
+	{
+		frame[--index] = '0' + team % 10;
+		team /= 10;
+	}
+	return (length + width);
+}
+
 static void	render_board(const t_board *board)
 {
-	char	frame[BOARD_CELLS + BOARD_SIZE + 1];
+	char	frame[BOARD_CELLS * 11 + BOARD_SIZE + 1];
 	int		cell;
 	int		index;
-	int		player_id;
+	int		width;
 
 	cell = 0;
 	index = 0;
+	width = tile_width(board);
 	while (cell < BOARD_CELLS)
 	{
-		player_id = board->cells[cell++];
-		frame[index++] = '.';
-		if (player_id != 0)
-			frame[index - 1] = '0' + board->players[player_id].team;
-		if (cell % BOARD_SIZE == 0)
+		index += put_tile(frame + index,
+				board->players[board->cells[cell]].team, width,
+				cell % BOARD_SIZE == 0);
+		if (++cell % BOARD_SIZE == 0)
 			frame[index++] = '\n';
 	}
 	frame[index] = '\0';

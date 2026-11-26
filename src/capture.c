@@ -10,14 +10,33 @@ static int	get_team_at(const t_board *board, int row, int column)
 	return (board->players[player_id].team);
 }
 
+/* Count one more neighbour of team; at most 8 distinct teams fit around. */
+static int	tally(int teams[8], int counts[8], int *seen, int team)
+{
+	int	index;
+
+	index = 0;
+	while (index < *seen && teams[index] != team)
+		index++;
+	if (index == *seen)
+	{
+		teams[index] = team;
+		counts[index] = 0;
+		(*seen)++;
+	}
+	return (++counts[index]);
+}
+
 bool	is_surrounded(const t_board *board, int player_id)
 {
-	int	counts[TEAM_COUNT + 1];
+	int	teams[8];
+	int	counts[8];
+	int	seen;
 	int	cell;
 	int	offset;
 	int	team;
 
-	ft_bzero(counts, sizeof(counts));
+	seen = 0;
 	cell = board->players[player_id].cell;
 	offset = 0;
 	while (offset < 9)
@@ -25,7 +44,7 @@ bool	is_surrounded(const t_board *board, int player_id)
 		team = get_team_at(board, cell / BOARD_SIZE + offset / 3 - 1,
 				cell % BOARD_SIZE + offset % 3 - 1);
 		if (team != 0 && team != board->players[player_id].team
-			&& ++counts[team] >= 2)
+			&& tally(teams, counts, &seen, team) >= 2)
 			return (true);
 		offset++;
 	}

@@ -3,6 +3,7 @@
 
 # include <errno.h>
 # include <fcntl.h>
+# include <limits.h>
 # include <signal.h>
 # include <stdbool.h>
 # include <stdio.h>
@@ -17,7 +18,6 @@
 
 # define BOARD_SIZE 20
 # define BOARD_CELLS 400
-# define TEAM_COUNT 7
 # define DEFAULT_PLAYERS 4
 # define TICK_MS 1000
 # define POLL_MS 100
@@ -45,7 +45,6 @@ typedef struct s_board
 	int			queue_id;
 	int			expected;
 	int			count;
-	int			team_count[TEAM_COUNT + 1];
 	int			winner;
 	t_phase		phase;
 	int			cells[BOARD_CELLS];
@@ -76,6 +75,7 @@ int		remove_keyed(t_session *session, key_t key);
 int		lock_board(const t_session *session);
 int		unlock_board(const t_session *session);
 
+int		parse_team(const char *arg);
 int		run_player(t_session *session, int team);
 int		join_player(t_board *board, int team);
 void	leave_player(t_session *session, int player_id);

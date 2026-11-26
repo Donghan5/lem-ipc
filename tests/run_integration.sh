@@ -237,7 +237,7 @@ start_first() {
 test_invalid_args() {
 	local ok=1 a
 	new_match
-	for a in "" "8" "12" "a" "-1" "99"; do
+	for a in "" "a" "-1" "+1" "1a" " 1" "2147483648"; do
 		( cd "$DIR" && timeout 3 "$BIN" "$a" >/dev/null 2>&1 )
 		[ "$?" = 1 ] || ok=0
 	done
@@ -354,6 +354,29 @@ test_display_renders_grid() {
 	signal_players INT
 	collect_players 5
 	check_cleanup "ipcs_clean_after_display"
+}
+
+# FAQ: no specific limit on the number of teams, so ids past 7 must play.
+test_large_team_ids() {
+	local ok=0
+	new_match
+	start_first big8.log 3 "$BIN" 8
+	launch big42a.log 3 "$BIN" 42
+	launch big42b.log 3 "$BIN" 42
+	wait_for_log ' joined team 42$' big42b.log
+	( cd "$DIR" && timeout 2 "$BIN" 0 >view.log 2>&1 )
+	grep -q '^Player [0-9]* joined team 8$' "$DIR/big8.log" \
+		&& grep -q '^Player [0-9]* joined team 42$' "$DIR/big42a.log" && ok=1
+	report "teams_8_and_42_join" "$ok" 0 ""
+	ok=0
+	grep -qE '(^| )42( |$)' "$DIR/view.log" \
+		&& grep -qE '(^| )+8( |$)' "$DIR/view.log" && ok=1
+	report "display_shows_multi_digit_teams" "$ok" 0 ""
+	collect_players 60
+	ok=0
+	grep -qhE '^Team (8|42) wins$' "$DIR"/big*.log && ok=$EXITS_OK
+	report "large_team_match_terminates" "$ok" 0 ""
+	check_cleanup "ipcs_clean_after_large_team_match"
 }
 
 test_stress_20_players() {
@@ -1014,6 +1037,7 @@ for signal in INT TERM HUP QUIT; do test_signal_withdraws "$signal"; done
 test_over_join_refused
 test_simultaneous_launch
 test_display_renders_grid
+test_large_team_ids
 test_stress_20_players
 test_cleanup_after_sigkill
 test_sigkill_during_match

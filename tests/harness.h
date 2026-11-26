@@ -25,6 +25,7 @@ int		suite_end(t_suite *suite);
 void	board_reset(t_board *board, int expected);
 void	board_put(t_board *board, int id, int team, int cell);
 int		cell_of(int row, int column);
+int		team_size(const t_board *board, int team);
 
 int		make_test_semaphore(void);
 
