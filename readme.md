@@ -29,16 +29,51 @@ wait
 
 When you use a custom roster size, start the first command and wait for its join message before you start the others, because only the first player reads `LEMIPC_PLAYERS`. Use Ctrl-C to close the display or to withdraw a player running in the foreground.
 
-### Convenience targets
+## Make targets
 
-```sh
-make play                    # teams 1 1 2 2, board on screen, logs in logs/
-make play TEAMS="1 1 1 2 2 2"
-make ipcs                    # IPC objects owned by this user (read only)
-make help                    # every target with a one-line description
-```
+`make help` prints the same list, grouped the same way, with examples.
 
-`make play` starts one background player for each entry in `TEAMS`, sets `LEMIPC_PLAYERS` to the number of entries, and shows the board in the foreground. Ctrl-C asks every player to leave, and the last one removes the IPC objects. `make ipcs` only lists objects. No target removes IPC objects for you, so a leak stays visible.
+**Build**
+
+| Target | What it does |
+| --- | --- |
+| `make` / `make all` | Build `lemipc` with libft. A second run rebuilds nothing. |
+| `make clean` | Remove object files, test binaries, and `ipc_probe`. |
+| `make fclean` | `clean`, plus `lemipc` and the libft archives. |
+| `make re` | `fclean`, then build again. |
+
+**Tests**
+
+| Target | What it does | Time |
+| --- | --- | --- |
+| `make test` | `unit` + `integration` | about 2 min |
+| `make unit` | Six unit suites: rules, roster, movement, config, IPC, IPC lifecycle | seconds |
+| `make ipc-test` | Only the IPC unit suite: creation failures and team target messages | seconds |
+| `make integration` | Real processes over real System V IPC | about 2 min |
+| `make stress` | 400 players in 7 teams, plus semaphore lock recovery. Not part of `make test`. | about 1 min |
+
+**Evaluation scenarios**
+
+| Target | What it does |
+| --- | --- |
+| `make eval-list` | Name and expected result of each scenario |
+| `make eval` | All seven scenarios, with Valgrind |
+| `make eval SCENARIO=<name>` | One scenario. Add `VERBOSE=1` for full logs. |
+
+Scenarios: `normal-win`, `sigint-withdrawal`, `sigkill-survivor`, `all-killed-recovery`, `display-last`, `large-teams`, `one-on-one-stalemate`. Each one reruns a test from `make integration` and reports Game, Memory, and IPC results for the evaluator.
+
+**Demos and inspection**
+
+| Target | What it does |
+| --- | --- |
+| `make demo [NTEAMS=2-7] [KILL=1]` | Two-terminal demo with `NTEAMS` teams of two players (default 2). `KILL=1` sends SIGKILL to one team 2 player during the match and shows recovery. See below. |
+| `make play [TEAMS="..."]` | One background player per entry (default `1 1 2 2`), board on screen, logs in `logs/` |
+| `make ipcs` | IPC objects owned by this user, with their role. Read only. |
+| `make help` | This list, plus how to run players by hand |
+
+`clean`, `fclean`, and `re` never touch IPC objects, and no target removes them for you, so a leak stays visible to `ipcs`.
+
+`make play` starts one background player for each entry in `TEAMS`, sets `LEMIPC_PLAYERS` to the number of entries, and shows the board in the foreground. Ctrl-C asks every player to leave, and the last one removes the IPC objects. Team ids are checked by `./lemipc` itself: if it rejects one, or if not every player joins within 5 seconds plus 0.1 second per player, `make play` asks the started players to leave and exits with status 1. Player logs are named by launch order (`logs/player-1.log`, ...).
 
 ## Rules
 
@@ -50,14 +85,14 @@ The FAQ in `faq.txt` is part of the subject, and it sets no limit on players or 
 
 - **Players:** at most 400. The board is 20×20 (`BOARD_SIZE` in `inc/lemipc.h`), and the FAQ leaves the board size to the implementation. The roster is checked against the board's cells.
 - **Teams:** no fixed limit. A team id is any `int` above zero, and nothing is indexed by team id. At most 400 teams can be on the board at once, since each team needs at least one player.
-- **Display:** teams 1–9 draw one character per tile. When a team id with more digits is on the board, every tile widens to fit it.
-- **Stalemates:** an elimination needs two players of the same team. A one-on-one match, or a board where every team has a single player, can therefore never end. This follows from the subject's rules. Demos use at least two players per team.
+- **Display:** teams 1–9 draw one character per tile. When a team id with more digits is on the board, every tile widens to fit it. `make eval SCENARIO=large-teams` plays teams 8 and 42.
+- **Stalemates:** an elimination needs two players of the same team. A one-on-one match, or a board where every team has a single player, can therefore never end. This follows from the subject's rules. Demos use at least two players per team, and `make eval SCENARIO=one-on-one-stalemate` shows the one-on-one case.
 
 ## Two-terminal demo
 
 1. In the right terminal, run `make demo` from the repository for two teams.
-   Use `make demo3`, `make demo4`, `make demo5`, `make demo6`, or `make demo7`
-   for three to seven teams. Each team has two players.
+   Use `make demo NTEAMS=3` up to `NTEAMS=7` for more teams. Each team has
+   two players.
 2. In the left terminal, run `./lemipc 0` from the same repository directory,
    or paste the full command printed by the demo.
 3. When the board shows one player waiting, press Enter in the right terminal
@@ -73,24 +108,16 @@ For a separate check of team-specific target messages, run
 The demo uses the repository directory for its game session. Close any existing
 session in that directory before starting the demo.
 
-To demonstrate recovery after a player is killed, run `make demo-kill` in the
-right terminal and open the same board on the left. Press Enter to start the
+To demonstrate recovery after a player is killed, run `make demo KILL=1` in
+the right terminal (it combines with `NTEAMS`) and open the same board on the
+left. Press Enter to start the
 match, then press Enter again at the SIGKILL prompt to kill the indicated
 Team 2 player. Watch the remaining players on the left. The right terminal
 reports the winner and checks that the session's three IPC IDs are gone.
 
 ## Tests
 
-```sh
-make test          # unit and integration suites (about 2 minutes)
-make unit          # game rules and focused System V IPC tests
-make integration   # real processes and real System V IPC
-make stress        # 400 real players across seven teams and lock recovery
-make eval-list     # scenario names and expected behavior
-make eval SCENARIO=sigkill-survivor
-make eval          # run all evaluation scenarios
-make eval SCENARIO=normal-win VERBOSE=1  # include full logs
-```
+The commands are listed under [Make targets](#make-targets).
 
 `make unit` links the core objects from `obj/src/` without `main.o`, so the suites call
 `is_surrounded`, `join_player`, `leave_player`, `move_player`,
@@ -109,7 +136,8 @@ and removes any of those objects that survive the match.
 The integration suite checks IPC cleanup after `SIGINT`, after a player is
 killed during a match, after the display exits last, and when a new run
 replaces a session whose last process was killed. It also plays a match
-between teams 8 and 42 to cover team ids beyond one digit. When Valgrind is
+between teams 8 and 42 to cover team ids beyond one digit, and checks that a
+one-on-one match keeps going until Ctrl-C. When Valgrind is
 installed, it checks all players in a normal match and the survivor in the
 in-progress `SIGKILL` test. Evaluation reports process exits, Valgrind checks,
 and the outcome for each kernel IPC object. The recovery scenario kills

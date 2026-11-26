@@ -23,16 +23,34 @@ TEST_BINS = $(TEST_DIR)/test_rules $(TEST_DIR)/test_roster \
             $(TEST_DIR)/test_ipc_lifecycle
 INTEGRATION = $(TEST_DIR)/run_integration.sh
 IPC_PROBE = $(TEST_DIR)/ipc_probe
-MULTI_TEAM_DEMOS = demo3 demo4 demo5 demo6 demo7
 export SCENARIO VERBOSE
 
 # make play TEAMS="1 1 1 2 2 2": one player per entry, all in this directory.
 TEAMS ?= 1 1 2 2
+# make demo NTEAMS=5 KILL=1: number of teams (2-7, two players each), and
+# KILL=1 to SIGKILL one team 2 player during the match.
+NTEAMS ?= 2
+KILL ?= 0
 
 .DEFAULT_GOAL := all
 MAKEFLAGS += --no-print-directory
 
+##@ Build
+
 all: $(NAME) ## Build lemipc (libft included)
+
+clean: ## Remove object files and test binaries
+	$(MAKE) -C $(LIBFT_DIR) clean
+	rm -f $(OBJS) $(SRCS:.c=.o)
+	@rmdir $(OBJ_DIR) obj 2>/dev/null || :
+	rm -f $(TEST_BINS) $(IPC_PROBE)
+
+fclean: clean ## clean + remove lemipc and libft archives
+	$(MAKE) -C $(LIBFT_DIR) fclean
+	rm -f $(NAME)
+
+re: fclean ## Rebuild from scratch
+	$(MAKE) all
 
 $(NAME): $(OBJS) $(PRINTF) $(LIBFT)
 	$(CC) $(CFLAGS) $(OBJS) $(PRINTF) $(LIBFT) -o $@
@@ -65,6 +83,10 @@ $(TEST_DIR)/test_ipc: TEST_LDFLAGS = -Wl,--wrap=semget,--wrap=msgget,--wrap=shmg
 $(IPC_PROBE): $(TEST_DIR)/ipc_probe.c inc/lemipc.h
 	$(CC) $(CPPFLAGS) $(CFLAGS) $< -o $@
 
+##@ Test
+
+test: unit integration ## Run unit + integration (about 2 minutes)
+
 unit: $(TEST_BINS) ## Run the unit test suites
 	@status=0; for suite in $(TEST_BINS); do \
 		./$$suite || status=1; \
@@ -79,53 +101,38 @@ integration: $(NAME) $(IPC_PROBE) ## Run real-process tests and check session IP
 stress: $(NAME) $(IPC_PROBE) $(TEST_DIR)/test_ipc_lifecycle ## Run the 400-player stress test and IPC lock recovery checks
 	@$(INTEGRATION) --stress
 
+##@ Evaluation
+
 eval-list: ## List the evaluation scenarios
 	@$(INTEGRATION) --eval-list
 
-eval: $(NAME) $(IPC_PROBE) ## Run evaluation scenarios (optionally SCENARIO=<name>)
+eval: $(NAME) $(IPC_PROBE) ## Run evaluation scenarios (SCENARIO=<name>, VERBOSE=1)
 	@$(INTEGRATION) --eval "$$SCENARIO"
 
-test: unit integration ## Run unit + integration (about 2 minutes)
+##@ Demo
 
-demo: $(NAME) $(IPC_PROBE) ## Run the two-terminal demo with two teams
-	@./scripts/demo.sh
+demo: $(NAME) $(IPC_PROBE) ## Two-terminal demo (NTEAMS=2-7, KILL=1 adds a SIGKILL)
+	@./scripts/demo.sh $(NTEAMS) $(if $(filter 1,$(KILL)),--kill-player)
 
-demo-kill: $(NAME) $(IPC_PROBE) ## Show recovery after SIGKILL in a two-terminal demo
-	@./scripts/demo.sh 2 --kill-player
-
-demo3: ## Run the two-terminal demo with three teams
-demo4: ## Run the two-terminal demo with four teams
-demo5: ## Run the two-terminal demo with five teams
-demo6: ## Run the two-terminal demo with six teams
-demo7: ## Run the two-terminal demo with seven teams
-
-$(MULTI_TEAM_DEMOS): $(NAME) $(IPC_PROBE)
-	@./scripts/demo.sh $(@:demo%=%)
-
-play: $(NAME) ## Start one player per TEAMS entry and show the board; Ctrl+C leaves
+play: $(NAME) ## One player per TEAMS entry, board on screen; Ctrl+C leaves
 	@./scripts/play.sh $(TEAMS)
 
 ipcs: ## List the IPC objects this user owns (read only, removes nothing)
 	@./scripts/ipcs.sh
 
 help: ## Show these commands
-	@echo "Usage: make [target]"
-	@awk -F ':.*## ' '/^[a-z0-9-]+:.*## / { printf "  %-12s %s\n", $$1, $$2 }' $(firstword $(MAKEFILE_LIST))
-	@echo "Run players by hand: LEMIPC_PLAYERS=4 ./lemipc <team>, board: ./lemipc 0"
-
-clean: ## Remove object files and test binaries
-	$(MAKE) -C $(LIBFT_DIR) clean
-	rm -f $(OBJS) $(SRCS:.c=.o)
-	@rmdir $(OBJ_DIR) obj 2>/dev/null || :
-	rm -f $(TEST_BINS) $(IPC_PROBE)
-
-fclean: clean ## clean + remove lemipc and libft archives
-	$(MAKE) -C $(LIBFT_DIR) fclean
-	rm -f $(NAME)
-
-re: fclean ## Rebuild from scratch
-	$(MAKE) all
+	@echo "Usage: make [target] [VARIABLE=value]"
+	@awk -F ':.*## ' ' \
+		/^##@ / { printf "\n%s\n", substr($$0, 5) } \
+		/^[a-z0-9-]+:.*## / { printf "  %-12s %s\n", $$1, $$2 }' \
+		$(firstword $(MAKEFILE_LIST))
+	@echo
+	@echo "Examples:"
+	@echo "  make demo NTEAMS=5 KILL=1"
+	@echo "  make play TEAMS=\"8 8 42 42\""
+	@echo "  make eval SCENARIO=large-teams"
+	@echo "  LEMIPC_PLAYERS=4 ./lemipc <team>    board: ./lemipc 0"
 
 FORCE:
 
-.PHONY: all clean fclean re test unit ipc-test integration stress eval eval-list demo demo-kill $(MULTI_TEAM_DEMOS) play ipcs help FORCE
+.PHONY: all clean fclean re test unit ipc-test integration stress eval eval-list demo play ipcs help FORCE

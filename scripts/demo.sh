@@ -7,7 +7,7 @@ PROBE="$ROOT/tests/ipc_probe"
 team_count="${1:-2}"
 mode="${2:-}"
 if [[ ! $team_count =~ ^[2-7]$ ]]; then
-	printf 'Demo: team count must be between 2 and 7.\n' >&2
+	printf 'Demo: NTEAMS (team count) must be between 2 and 7.\n' >&2
 	exit 1
 fi
 player_count=$((team_count * 2))
