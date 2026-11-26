@@ -200,12 +200,42 @@ test_display_without_session() {
 	report "display_without_session_fails" "$ok" 0 ""
 }
 
+# What an evaluator sees with ipcs: this user's objects of one kind (m, s, q).
+user_ipc_ids() {
+	LC_ALL=C ipcs "-$1" | awk -v user="$(id -un)" '$3 == user { print $2 }' | sort
+}
+
+# Objects of one kind that did not exist when the suite started.
+new_ipc_ids() {
+	comm -13 <(printf '%s\n' "${BASELINE[$1]}" | sed '/^$/d') <(user_ipc_ids "$1")
+}
+
+# Every object the suite created must be gone, whatever test leaked it.
+check_no_new_ipcs() {
+	local kind id leaked=() ok=0
+	for kind in m s q; do
+		for id in $(new_ipc_ids "$kind"); do
+			leaked+=("$kind:$id")
+			ipcrm "-$kind" "$id" 2>/dev/null
+		done
+	done
+	[ "${#leaked[@]}" = 0 ] && ok=1
+	report "ipcs_unchanged_after_suite" "$ok" 0 \
+		"${leaked[*]:-same objects as before the suite}"
+}
+
 test_match_and_cleanup() {
-	local ok=0
+	local ok=0 counts=""
 	new_match
 	start_first p1.log 3 "$BIN" 1
 	launch p2.log 3 "$BIN" 1
 	launch p3.log 3 "$BIN" 2
+	if wait_for_log ' joined team ' p3.log; then
+		counts="$(new_ipc_ids m | wc -l)/$(new_ipc_ids s | wc -l)/$(new_ipc_ids q | wc -l)"
+		[ "$counts" = "1/1/1" ] && ok=1
+	fi
+	report "one_shm_sem_and_msq_per_match" "$ok" 0 "new shm/sem/msq=$counts"
+	ok=0
 	collect_players 60
 	grep -qh '^Team 1 wins$' "$DIR"/p*.log && ok=$EXITS_OK
 	report "match_declares_a_winner" "$ok" 0 ""
@@ -488,10 +518,73 @@ test_closed_stdout_cleans_up() {
 	report "closed_stdout_ends_match_cleanly" "$ok" 0 "probe=$status (1 = no session left)"
 }
 
+# Two players of one team die in the same instant: the survivors must reap
+# both in one pass, win, and clean up.
+test_simultaneous_deaths() {
+	local first second third fourth winner=0
+	new_match
+	start_first d1.log 4 "$BIN" 1
+	first=$PID
+	launch d2.log 4 "$BIN" 1
+	second=$PID
+	launch d3.log 4 "$BIN" 2
+	third=$PID
+	launch d4.log 4 "$BIN" 2
+	fourth=$PID
+	if wait_for_log ' moved$' d4.log && kill -KILL "$third" "$fourth"; then
+		wait "$third" "$fourth" 2>/dev/null
+		PIDS=("$first" "$second")
+		collect_players 10
+		grep -qx 'Team 1 wins' "$DIR/d1.log" "$DIR/d2.log" && winner=$EXITS_OK
+	fi
+	if [ "${#PIDS[@]}" -gt 0 ]; then
+		signal_players KILL
+		collect_players 1
+	fi
+	report "simultaneous_deaths_survivors_win" "$winner" 0 ""
+	check_cleanup "ipcs_clean_after_simultaneous_deaths"
+}
+
+# SIGKILL cannot be caught, so a match where everyone is killed leaves its
+# session behind; the next run in that directory must reclaim it and play.
+test_all_killed_then_rerun() {
+	local stale_ids rerun_ids left=0 replayed=0
+	new_match
+	start_first k1.log 4 "$BIN" 1
+	launch k2.log 4 "$BIN" 1
+	launch k3.log 4 "$BIN" 2
+	launch k4.log 4 "$BIN" 2
+	if wait_for_log ' moved$' k4.log; then
+		# bash reports every SIGKILLed job on stderr; the status is what counts.
+		{ signal_players KILL; collect_players 5; } 2>/dev/null
+		( cd "$DIR" && "$PROBE" >/dev/null ) && left=1
+		stale_ids=$IPC_IDS
+		IPC_IDS=
+		start_first r1.log 3 "$BIN" 1
+		launch r2.log 3 "$BIN" 1
+		launch r3.log 3 "$BIN" 2
+		collect_players 60
+		grep -qx 'Team 1 wins' "$DIR"/r*.log && [ -n "$IPC_IDS" ] \
+			&& [ "$IPC_IDS" != "$stale_ids" ] && replayed=$EXITS_OK
+	fi
+	report "running_session_left_by_sigkill" "$left" 0 "(expected: nothing can clean up)"
+	report "rerun_after_sigkill_plays_full_match" "$replayed" 0 ""
+	rerun_ids=$IPC_IDS
+	IPC_IDS=$stale_ids
+	check_cleanup "killed_running_session_reclaimed"
+	IPC_IDS=$rerun_ids
+	check_cleanup "ipcs_clean_after_rerun"
+}
+
 if [ ! -x "$BIN" ] || [ ! -x "$PROBE" ]; then
 	echo "integration: build lemipc and ipc_probe with make integration" >&2
 	exit 1
 fi
+
+declare -A BASELINE
+for kind in m s q; do
+	BASELINE[$kind]="$(user_ipc_ids "$kind")"
+done
 
 echo "== integration: real processes + System V IPC =="
 test_invalid_args
@@ -508,9 +601,12 @@ test_sigkill_during_match
 test_zombie_opponent_reaped
 test_closed_stdout_cleans_up
 test_stale_session_replaced
+test_simultaneous_deaths
+test_all_killed_then_rerun
 test_display_closes_last
 test_output_not_garbled
 test_valgrind_match
+check_no_new_ipcs
 
 echo
 echo "-- integration: $PASS passed, $FAIL failed, $XFAIL xfail (known bugs), $XPASS xpass"
