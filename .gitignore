@@ -13,3 +13,4 @@ tests/test_*
 !tests/test_*.c
 analysis-guide.md
 todo.md
+logs/
