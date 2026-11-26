@@ -33,7 +33,7 @@ Players check for elimination before each turn. They move one tile up, down, lef
 The right terminal also prints the session's message queue ID and reports
 when the kernel records a successful send and receive by demo players.
 For a separate check of team-specific target messages, run
-`make tests/test_ipc && ./tests/test_ipc`.
+`make ipc-test`.
 
 The demo uses the repository directory for its game session. Close any existing
 session in that directory before starting the demo.
