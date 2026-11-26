@@ -358,10 +358,11 @@ test_display_renders_grid() {
 
 # FAQ: no specific limit on the number of teams, so ids past 7 must play.
 test_large_team_ids() {
-	local ok=0
+	local memory="${1:-0}" ok=0
 	new_match
-	start_first big8.log 3 "$BIN" 8
-	launch big42a.log 3 "$BIN" 42
+	prepare_memory "$memory" "first player of each team"
+	start_checked big8.log 3 8
+	launch_checked big42a.log 3 42
 	launch big42b.log 3 "$BIN" 42
 	wait_for_log ' joined team 42$' big42b.log
 	( cd "$DIR" && timeout 2 "$BIN" 0 >view.log 2>&1 )
@@ -377,6 +378,28 @@ test_large_team_ids() {
 	grep -qhE '^Team (8|42) wins$' "$DIR"/big*.log && ok=$EXITS_OK
 	report "large_team_match_terminates" "$ok" 0 ""
 	check_cleanup "ipcs_clean_after_large_team_match"
+}
+
+# The subject needs two players of one team to eliminate anyone, so a
+# one-on-one match never ends by itself: both keep moving until Ctrl-C.
+test_one_on_one_stalemate() {
+	local memory="${1:-0}" ok=0 moved
+	new_match
+	prepare_memory "$memory"
+	start_checked duel1.log 2 1
+	launch_checked duel2.log 2 2
+	wait_for_log ' joined team 2$' duel2.log
+	sleep 5
+	moved="$(grep -c ' moved$' "$DIR"/duel1.log "$DIR"/duel2.log | awk -F: '$2 > 0' | wc -l)"
+	if [ "$moved" = 2 ] && [ "$(jobs -pr | wc -l)" = 2 ] \
+		&& ! grep -qE 'eliminated|wins' "$DIR"/duel1.log "$DIR"/duel2.log; then
+		ok=1
+	fi
+	report "one_on_one_never_ends" "$ok" 0 "players still moving after 5s=$moved/2"
+	signal_players INT
+	collect_players 10
+	report "one_on_one_stops_on_sigint" "$EXITS_OK" 0 ""
+	check_cleanup "ipcs_clean_after_one_on_one"
 }
 
 test_stress_20_players() {
@@ -850,13 +873,16 @@ finish_memory() {
 	esac
 }
 
-EVAL_SCENARIOS=(normal-win sigint-withdrawal sigkill-survivor all-killed-recovery display-last)
+EVAL_SCENARIOS=(normal-win sigint-withdrawal sigkill-survivor all-killed-recovery display-last
+	large-teams one-on-one-stalemate)
 EVAL_TITLES=(
 	"Normal match"
 	"Ctrl-C withdrawal (SIGINT)"
 	"Kill one player (SIGKILL)"
 	"Kill all players and restart"
 	"Display exits last"
+	"Team ids past 7"
+	"One-on-one stalemate"
 )
 EVAL_EXPECTED=(
 	"Team 1 wins, team 2 is eliminated, and the players remove all IPC."
@@ -864,6 +890,8 @@ EVAL_EXPECTED=(
 	"After play starts, the victim exits on SIGKILL and the survivor wins and removes all IPC."
 	"After play starts, SIGKILL leaves all three IDs behind. Relaunch in the same directory, reclaim those IDs, and finish a new match."
 	"The display renders while the player is attached, then closes and removes all IPC after the player is killed."
+	"Teams 8 and 42 join (the FAQ sets no team limit), the display widens its tiles for 42, one team wins, and the players remove all IPC."
+	"With one player per team nobody can be eliminated, so both keep moving. Ctrl-C then stops both players and removes all IPC."
 )
 
 list_eval() {
@@ -907,6 +935,15 @@ print_eval_game() {
 			print_eval_check Game: display_renders_while_player_is_attached 'The display rendered while the player was attached.' 'Could not verify the display rendered with a player attached.'
 			print_eval_check '' last_display_exits_after_player_sigkill 'After the player was killed, the display closed last.' 'Could not confirm the display closed after the player was killed.'
 			;;
+		large-teams)
+			print_eval_check Game: teams_8_and_42_join 'Players of teams 8 and 42 joined.' 'Could not confirm teams 8 and 42 joined.'
+			print_eval_check '' display_shows_multi_digit_teams 'The display showed 8 and 42 in widened tiles.' 'Could not find both team ids on the display.'
+			print_eval_check '' large_team_match_terminates 'The match ended with a winner.' 'Could not confirm a winner.'
+			;;
+		one-on-one-stalemate)
+			print_eval_check Game: one_on_one_never_ends 'After 5s both players were still moving, with no elimination or winner.' 'The one-on-one match did not stay in a stalemate.'
+			print_eval_check '' one_on_one_stops_on_sigint 'Ctrl-C stopped both players normally.' 'Could not confirm both players stopped after SIGINT.'
+			;;
 	esac
 }
 
@@ -917,6 +954,8 @@ print_eval_ipc() {
 		sigint-withdrawal) cleanup=ipcs_clean_after_sigint_withdrawal ;;
 		sigkill-survivor) cleanup=ipc_cleanup_after_running_sigkill ;;
 		display-last) cleanup=ipc_cleanup_after_last_display ;;
+		large-teams) cleanup=ipcs_clean_after_large_team_match ;;
+		one-on-one-stalemate) cleanup=ipcs_clean_after_one_on_one ;;
 		all-killed-recovery)
 			print_eval_check IPC: running_session_left_by_sigkill 'Old SHM, SEM and MSGQ remained after SIGKILL.' 'Old resources after SIGKILL.'
 			print_eval_check '' killed_running_session_reclaimed 'The restart removed the old SHM, SEM and MSGQ.' 'Old resources on restart.'
@@ -958,6 +997,8 @@ run_eval_scenario() {
 		sigkill-survivor) test_sigkill_during_match ;;
 		all-killed-recovery) test_all_killed_then_rerun ;;
 		display-last) test_display_closes_last ;;
+		large-teams) test_large_team_ids 1 ;;
+		one-on-one-stalemate) test_one_on_one_stalemate 1 ;;
 	esac
 	if [ "$name" != sigkill-survivor ]; then
 		finish_memory
@@ -1038,6 +1079,7 @@ test_over_join_refused
 test_simultaneous_launch
 test_display_renders_grid
 test_large_team_ids
+test_one_on_one_stalemate
 test_stress_20_players
 test_cleanup_after_sigkill
 test_sigkill_during_match
