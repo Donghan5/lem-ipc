@@ -104,11 +104,27 @@ static void	test_stop_while_waiting(t_suite *s, t_session *session)
 		semctl(session->sem_id, 0, GETVAL), 1);
 }
 
+static pid_t	start_lock_waiter(t_session *session)
+{
+	pid_t	child;
+
+	child = fork();
+	if (child == 0)
+	{
+		alarm(6);
+		if (lock_board(session) == -1 || unlock_board(session) == -1)
+			_exit(1);
+		_exit(0);
+	}
+	return (child);
+}
+
 static void	test_crashed_lock_owner(t_suite *s, t_session *session)
 {
 	int		ready[2];
 	char	marker;
 	pid_t	child;
+	pid_t	waiter;
 
 	if (pipe(ready) == -1)
 	{
@@ -129,9 +145,14 @@ static void	test_crashed_lock_owner(t_suite *s, t_session *session)
 	check(s, "child_holds_lock_before_death", read(ready[0], &marker, 1) == 1, true);
 	close(ready[0]);
 	check(s, "crashed_owner_held_lock", semctl(session->sem_id, 0, GETVAL), 0);
+	waiter = start_lock_waiter(session);
+	check(s, "waiter_blocks_behind_owner_before_sigkill",
+		waiter > 0 && wait_for_waiter(session->sem_id), true);
 	if (child > 0)
 		check(s, "kill_lock_owner", kill(child, SIGKILL), 0);
 	check(s, "owner_died_by_sigkill", wait_status(child, SIGKILL), true);
+	check(s, "waiter_acquires_and_releases_lock_after_sigkill",
+		wait_status(waiter, 0), true);
 	check(s, "sem_undo_releases_dead_owners_lock",
 		semctl(session->sem_id, 0, GETVAL), 1);
 }
@@ -430,14 +451,16 @@ static void	test_lifecycle(t_suite *s)
 	key_t		key;
 	int			result;
 	int			cycle;
+	bool		unused_key;
 
 	key = ftok(".", 'L');
 	check(s, "session_key_created", key != (key_t)-1, true);
 	if (key == (key_t)-1)
 		return ;
 	result = shmget(key, 1, 0600);
-	check(s, "session_key_is_unused", result == -1 && errno == ENOENT, true);
-	if (result != -1 || errno != ENOENT)
+	unused_key = result == -1 && errno == ENOENT;
+	check(s, "session_key_is_unused", unused_key, true);
+	if (!unused_key)
 		return ;
 	test_concurrent_board(s, key);
 	test_orphans_reclaimed(s, key, false);

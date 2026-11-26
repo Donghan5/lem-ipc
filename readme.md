@@ -46,6 +46,7 @@ A player is eliminated when at least two adjacent players belong to the same opp
 make test          # unit and integration suites
 make unit          # game rules and focused System V IPC tests
 make integration   # real processes and real System V IPC
+make stress        # 400 real players across seven teams and lock recovery
 make eval-list      # scenario names and expected behavior
 make eval SCENARIO=sigkill-survivor
 make eval           # run all evaluation scenarios
@@ -73,6 +74,17 @@ it checks all players in a normal match and the survivor in the in-progress
 `SIGKILL` test. Evaluation reports process exits, Valgrind checks, and the
 outcome for each kernel IPC object. The recovery scenario kills players
 after the session is initialized and play has started.
+
+`make stress` starts 400 player processes in a separate session, with 58 in
+team 1 and 57 in each other team. It checks the roster and looks for a move
+or elimination, with up to 30 seconds for each stage. It then sends SIGINT
+and checks that all children are reaped within 15 seconds and the session's
+SHM, SEM, and MSGQ are gone. The IPC lifecycle suite separately checks
+semaphore recovery by checking that a blocked waiter acquires the lock after
+the owner is killed. Valgrind checks the first player from each team (7 of
+400) for memory errors and definite, indirect, and possible leaks. The
+memory check reports `SKIP` if Valgrind is unavailable. Use `VERBOSE=1`
+for Valgrind logs and lifecycle test details.
 
 One integration test is marked `XFAIL` because it records a known defect:
 

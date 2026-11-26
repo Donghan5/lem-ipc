@@ -76,6 +76,9 @@ ipc-test: $(TEST_DIR)/test_ipc ## Run the IPC and team message tests
 integration: $(NAME) $(IPC_PROBE) ## Run real-process tests and check session IPC
 	@$(INTEGRATION)
 
+stress: $(NAME) $(IPC_PROBE) $(TEST_DIR)/test_ipc_lifecycle ## Run the 400-player stress test and IPC lock recovery checks
+	@$(INTEGRATION) --stress
+
 eval-list: ## List the evaluation scenarios
 	@$(INTEGRATION) --eval-list
 
@@ -122,4 +125,4 @@ re: fclean ## Rebuild from scratch
 
 FORCE:
 
-.PHONY: all clean fclean re test unit ipc-test integration eval eval-list demo $(MULTI_TEAM_DEMOS) play ipcs help FORCE
+.PHONY: all clean fclean re test unit ipc-test integration stress eval eval-list demo $(MULTI_TEAM_DEMOS) play ipcs help FORCE

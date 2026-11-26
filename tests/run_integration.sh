@@ -127,9 +127,9 @@ signal_tracked() {
 
 signal_players() {
 	local signal="$1" pid active
-	active="$(jobs -pr; jobs -ps)"
+	active=$'\n'$(jobs -pr; jobs -ps)$'\n'
 	for pid in "${PIDS[@]}"; do
-		if grep -qx "$pid" <<< "$active"; then
+		if [[ $active == *$'\n'"$pid"$'\n'* ]]; then
 			kill "-$signal" "$pid" 2>/dev/null
 		fi
 	done
@@ -373,6 +373,138 @@ test_stress_20_players() {
 	grep -qhE '^Team [12] wins$' "$DIR"/big.*.log && ok=$EXITS_OK
 	report "stress_20_players_terminates" "$ok" 0 ""
 	check_cleanup "ipcs_clean_after_stress"
+}
+
+launch_stress_roster() {
+	local deadline="$1" team slot count
+	start_checked stress.1.1.log 400 1 || return 1
+	for ((team = 1; team <= 7; team++)); do
+		count=57
+		[ "$team" != 1 ] || count=58
+		for ((slot = 1; slot <= count; slot++)); do
+			[ "$team.$slot" != 1.1 ] || continue
+			[ "$SECONDS" -lt "$deadline" ] || return 1
+			if [ "$slot" = 1 ]; then
+				launch_checked "stress.$team.$slot.log" 400 "$team"
+			else
+				launch "stress.$team.$slot.log" 400 "$BIN" "$team"
+			fi
+		done
+	done
+}
+
+stress_roster() {
+	awk '
+		/^Player [0-9]+ joined team [1-7]$/ {
+			name = FILENAME
+			sub(/^.*\//, "", name)
+			split(name, file, "[.]")
+			if (seen_file[FILENAME]++ || seen_id[$2]++ || $2 < 1 || $2 > 400 				|| $NF != file[2])
+				bad = 1
+			else {
+				joined++
+				teams[$NF]++
+			}
+		}
+		END {
+			printf "%d/400 unique players; teams", joined
+			for (team = 1; team <= 7; team++) {
+				printf " %d=%d", team, teams[team]
+				if (teams[team] != (team == 1 ? 58 : 57))
+					bad = 1
+			}
+			if (joined != 400 || bad)
+				exit 1
+		}
+	' "$DIR"/stress.*.log
+}
+
+stress_result() {
+	printf '%-12s %s %s\n' "$1" "$2" "$3" | color_statuses
+}
+
+run_stress() {
+	local deadline roster progress result=0 ready=0 started=$SECONDS lifecycle process
+	new_match
+	prepare_memory 1
+	printf '== stress: 7 teams, 400 player processes ==\n'
+	deadline=$((SECONDS + 30))
+	if launch_stress_roster "$deadline"; then
+		while [ "$SECONDS" -lt "$deadline" ]; do
+			if roster="$(stress_roster 2>/dev/null)"; then
+				ready=1
+				break
+			fi
+			sleep 0.1
+		done
+	fi
+	if [ "$ready" = 1 ]; then
+		stress_result "Join" PASS "$roster"
+		deadline=$((SECONDS + 30))
+		while [ "$SECONDS" -lt "$deadline" ]; do
+			progress="$(awk '/ (moved|was eliminated)$/ { print; exit }' "$DIR"/stress.*.log)"
+			[ -z "$progress" ] || break
+			sleep 0.1
+		done
+		if [ -n "$progress" ]; then
+			stress_result "Progress" PASS "$progress"
+		else
+			stress_result "Progress" FAIL "no move or elimination observed within 30s"
+			result=1
+		fi
+	else
+		roster="$(stress_roster 2>/dev/null)"
+		stress_result "Join" FAIL "${roster:-no join logs}; expected full roster within 30s"
+		stress_result "Progress" SKIP "full roster did not join"
+		result=1
+	fi
+
+	remember_ipc
+	signal_players INT
+	collect_players 15
+	if [ "$EXITS_OK" = 1 ]; then
+		stress_result "Shutdown" PASS "${#MATCH_PIDS[@]} players reaped after SIGINT (15s limit)"
+	else
+		stress_result "Shutdown" FAIL "timeout or unexpected exit status"
+		cat "$DIR/process-diagnostics"
+		result=1
+	fi
+	MEMORY_LABEL="Valgrind, first player per team (${#MEMORY_CHECKS[@]}/400 players)"
+	check_memory
+	printf '%-12s %s\n' Memory "$MEMORY_RESULT" | color_statuses
+	if [[ $MEMORY_RESULT == FAIL* ]]; then
+		[ ! -s "$DIR/memory-diagnostics" ] || cat "$DIR/memory-diagnostics"
+		result=1
+	elif [ "${VERBOSE:-0}" = 1 ] && [ "$MEMORY_ENABLED" = 1 ]; then
+		for process in "${MEMORY_CHECKS[@]}"; do
+			cat "$DIR/$process.vg"
+		done
+	fi
+	inspect_ipc 1 1
+	if [ "$IPC_OK" = 1 ]; then
+		stress_result "IPC cleanup" PASS "$IPC_DETAIL"
+	else
+		stress_result "IPC cleanup" FAIL "$IPC_DETAIL"
+		cat "$DIR/ipc-diagnostics"
+		result=1
+	fi
+	if [ "$ready" != 1 ]; then
+		awk '!/^Player / && NF { print FILENAME ": " $0 }' "$DIR"/stress.*.log 2>/dev/null | head -10
+	fi
+
+	lifecycle="$ROOT/tests/test_ipc_lifecycle"
+	if timeout --kill-after=2s 15s "$lifecycle" >"$DIR/lock-recovery.log" 2>&1 \
+		&& grep -qE '^  ok +waiter_acquires_and_releases_lock_after_sigkill$' "$DIR/lock-recovery.log"; then
+		stress_result "Lock recovery" PASS "blocked waiter acquired the semaphore after lock-owner SIGKILL"
+	else
+		stress_result "Lock recovery" FAIL "waiter recovery was not verified within 15s"
+		result=1
+	fi
+	if [ "${VERBOSE:-0}" = 1 ] || [ "$result" != 0 ]; then
+		cat "$DIR/lock-recovery.log"
+	fi
+	printf 'Elapsed: %ds\n' "$((SECONDS - started))"
+	return "$result"
 }
 
 test_cleanup_after_sigkill() {
@@ -656,15 +788,10 @@ valgrind_counts() {
 	' "$1"
 }
 
-finish_memory() {
+check_memory() {
 	local process errors definite indirect possible counts
 	local findings=()
-	if [ "$MEMORY_ENABLED" = 0 ]; then
-		if [ "$MEMORY_RESULT" != N/A ] && [ "${EVAL_MODE:-0}" = 0 ]; then
-			printf '  %s\n' "$MEMORY_RESULT" | color_statuses
-		fi
-		return
-	fi
+	[ "$MEMORY_ENABLED" = 1 ] || return 0
 	for process in "${MEMORY_CHECKS[@]}"; do
 		counts="$(valgrind_counts "$DIR/$process.vg" 2>/dev/null)" || counts="unknown unknown unknown unknown"
 		read -r errors definite indirect possible <<< "$counts"
@@ -675,14 +802,29 @@ finish_memory() {
 	done
 	if [ "${#findings[@]}" -gt 0 ]; then
 		MEMORY_RESULT="FAIL (${findings[*]})"
+	else
+		MEMORY_RESULT="PASS (${MEMORY_LABEL:-${MEMORY_CHECKS[*]}})"
+	fi
+}
+
+finish_memory() {
+	check_memory
+	case "$MEMORY_RESULT" in
+	FAIL*)
 		report "valgrind_memory_check" 0 0 "$MEMORY_RESULT"
 		if [ "${EVAL_MODE:-0}" = 0 ]; then
 			cat "$DIR/memory-diagnostics"
 		fi
-	else
-		MEMORY_RESULT="PASS (${MEMORY_LABEL:-${MEMORY_CHECKS[*]}})"
+		;;
+	PASS*)
 		report "valgrind_memory_check" 1 0 "$MEMORY_RESULT"
-	fi
+		;;
+	SKIP*)
+		if [ "${EVAL_MODE:-0}" = 0 ]; then
+			printf '  %s\n' "$MEMORY_RESULT" | color_statuses
+		fi
+		;;
+	esac
 }
 
 EVAL_SCENARIOS=(normal-win sigint-withdrawal sigkill-survivor all-killed-recovery display-last)
@@ -855,6 +997,11 @@ fi
 
 if [ "${1:-}" = --eval ]; then
 	run_eval "${2:-}"
+	exit "$?"
+fi
+
+if [ "${1:-}" = --stress ]; then
+	run_stress
 	exit "$?"
 fi
 
