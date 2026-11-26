@@ -4,7 +4,20 @@ A 42 project in which each player runs in its own process. Players share a board
 
 ## Run a match
 
-Build with `make`. Run all processes for a match from the same working directory. The first player creates the session and reads `LEMIPC_PLAYERS`, which defaults to four and accepts 2–400. The match starts when the expected roster has joined.
+Build with `make`.
+
+**Run every process of a match from the same working directory.** The session key comes from `ftok(".")`, so the directory is the game: players started in another directory join a different session, and the display finds no session at all.
+
+```sh
+./lemipc <team>    # join as a player of <team>
+./lemipc 0         # open a terminal view of the running session
+```
+
+| Input | Accepted values |
+| --- | --- |
+| `<team>` | Any positive number from `1` to `2147483647` (`INT_MAX`). Signs, spaces, trailing characters, and larger numbers are rejected. |
+| `0` | Display only. It never creates the board and never changes it. |
+| `LEMIPC_PLAYERS` | Roster size read by the first player, `2`–`400`, default `4`. The match starts once that many players have joined. |
 
 ```sh
 LEMIPC_PLAYERS=3 ./lemipc 1 &
@@ -14,9 +27,31 @@ LEMIPC_PLAYERS=3 ./lemipc 1 &
 wait
 ```
 
-Start the first command and wait for its join message before starting the others when using a custom roster size. With the default roster size, launch four players. Any positive number selects a team (there is no fixed limit on teams); teams 1-9 draw one character per tile and larger ids widen every tile. Argument `0` opens a terminal view of an existing session. Use Ctrl-C to close the display or withdraw a player running in the foreground.
+When you use a custom roster size, start the first command and wait for its join message before you start the others, because only the first player reads `LEMIPC_PLAYERS`. Use Ctrl-C to close the display or to withdraw a player running in the foreground.
 
-Players check for elimination before each turn. They move one tile up, down, left, or right when a legal move is available, with one second between turns. A player is eliminated when two or more adjacent players belong to the same opposing team. Diagonal neighbors count for elimination. Teammates exchange target coordinates, and the last team remaining wins.
+### Convenience targets
+
+```sh
+make play                    # teams 1 1 2 2, board on screen, logs in logs/
+make play TEAMS="1 1 1 2 2 2"
+make ipcs                    # IPC objects owned by this user (read only)
+make help                    # every target with a one-line description
+```
+
+`make play` starts one background player for each entry in `TEAMS`, sets `LEMIPC_PLAYERS` to the number of entries, and shows the board in the foreground. Ctrl-C asks every player to leave, and the last one removes the IPC objects. `make ipcs` only lists objects. No target removes IPC objects for you, so a leak stays visible.
+
+## Rules
+
+Players check for elimination before each turn. They move one tile up, down, left, or right when a legal move is available, with one second between turns. A tile holds at most one player. A player is eliminated when at least two adjacent players belong to the same opposing team. Diagonal neighbors count for elimination. Teammates exchange target coordinates through the message queue, and the last team remaining wins.
+
+## Limits
+
+The FAQ in `faq.txt` is part of the subject, and it sets no limit on players or teams.
+
+- **Players:** at most 400. The board is 20×20 (`BOARD_SIZE` in `inc/lemipc.h`), and the FAQ leaves the board size to the implementation. The roster is checked against the board's cells.
+- **Teams:** no fixed limit. A team id is any `int` above zero, and nothing is indexed by team id. At most 400 teams can be on the board at once, since each team needs at least one player.
+- **Display:** teams 1–9 draw one character per tile. When a team id with more digits is on the board, every tile widens to fit it.
+- **Stalemates:** an elimination needs two players of the same team. A one-on-one match, or a board where every team has a single player, can therefore never end. This follows from the subject's rules. Demos use at least two players per team.
 
 ## Two-terminal demo
 
@@ -38,8 +73,6 @@ For a separate check of team-specific target messages, run
 The demo uses the repository directory for its game session. Close any existing
 session in that directory before starting the demo.
 
-A player is eliminated when at least two adjacent players belong to the same opposing team, and diagonals count.
-
 To demonstrate recovery after a player is killed, run `make demo-kill` in the
 right terminal and open the same board on the left. Press Enter to start the
 match, then press Enter again at the SIGKILL prompt to kill the indicated
@@ -49,23 +82,23 @@ reports the winner and checks that the session's three IPC IDs are gone.
 ## Tests
 
 ```sh
-make test          # unit and integration suites
+make test          # unit and integration suites (about 2 minutes)
 make unit          # game rules and focused System V IPC tests
 make integration   # real processes and real System V IPC
 make stress        # 400 real players across seven teams and lock recovery
-make eval-list      # scenario names and expected behavior
+make eval-list     # scenario names and expected behavior
 make eval SCENARIO=sigkill-survivor
-make eval           # run all evaluation scenarios
+make eval          # run all evaluation scenarios
 make eval SCENARIO=normal-win VERBOSE=1  # include full logs
 ```
 
 `make unit` links the core objects from `obj/src/` without `main.o`, so the suites call
-`is_surrounded`, `join_player`, `leave_player`, `move_player` and
-`choose_target` directly on a plain `t_board`. The movement suite checks
-forced moves and runs 400000 random move attempts before checking board
-consistency. The IPC suite uses private IPC objects and GNU linker wrapping
-to inject failures during session creation. It also checks empty and full
-message queues and team-specific target exchange.
+`is_surrounded`, `join_player`, `leave_player`, `move_player`,
+`choose_target` and `parse_team` directly on a plain `t_board`. The movement
+suite checks forced moves and runs 400000 random move attempts before checking
+board consistency. The IPC suite uses private IPC objects and GNU linker
+wrapping to inject failures during session creation. It also checks empty and
+full message queues and team-specific target exchange.
 
 `make integration` starts real matches. Every test runs in its own fresh
 directory, because the session key comes from `ftok(".")` and a new directory
@@ -75,11 +108,12 @@ and removes any of those objects that survive the match.
 
 The integration suite checks IPC cleanup after `SIGINT`, after a player is
 killed during a match, after the display exits last, and when a new run
-replaces a session whose last process was killed. When Valgrind is installed,
-it checks all players in a normal match and the survivor in the in-progress
-`SIGKILL` test. Evaluation reports process exits, Valgrind checks, and the
-outcome for each kernel IPC object. The recovery scenario kills players
-after the session is initialized and play has started.
+replaces a session whose last process was killed. It also plays a match
+between teams 8 and 42 to cover team ids beyond one digit. When Valgrind is
+installed, it checks all players in a normal match and the survivor in the
+in-progress `SIGKILL` test. Evaluation reports process exits, Valgrind checks,
+and the outcome for each kernel IPC object. The recovery scenario kills
+players after the session is initialized and play has started.
 
 `make stress` starts 400 player processes in a separate session, with 58 in
 team 1 and 57 in each other team. It checks the roster and looks for a move
@@ -92,36 +126,29 @@ the owner is killed. Valgrind checks the first player from each team (7 of
 memory check reports `SKIP` if Valgrind is unavailable. Use `VERBOSE=1`
 for Valgrind logs and lifecycle test details.
 
-One integration test is marked `XFAIL` because it records a known defect:
+On a slow machine the 30-second join stage can miss one or two of the 400
+players, which shows up as `Join FAIL 399/400`. This is a timing limit of the
+test, not a lost player: shutdown, Valgrind, and IPC cleanup still pass in
+that run.
 
-| Test | Defect |
-| --- | --- |
-| `player_lines_never_garbled` | `ft_printf` issues one `write(2)` per byte, so players sharing a terminal interleave mid-word |
+### Shared output
 
-The defect only reproduces when the players share one file descriptor and
-start together. `TICK_MS` is one second, so players launched in lockstep print
-in the same instant on every tick and collide, while starting them half a
-second apart keeps their bursts from overlapping and hides the defect:
-
-| Launch | Malformed lines |
-| --- | --- |
-| staggered by 0.5s | 0 of 45 |
-| started together | 87 of 123 |
-
-Starting every player at once is the documented way to run a match, so the
-test launches them that way.
-
-When the defect is fixed the suite prints `XPASS`; drop that test's
-known-fail flag in `tests/run_integration.sh` at that point.
+`ft_printf` issues one `write(2)` per byte, so players sharing a terminal
+used to interleave mid-word when they printed in the same instant. Player
+messages now go through `announce()`, which formats the whole line first and
+prints it with a single `write()`. The integration test
+`player_lines_never_garbled` starts every player at once on one file
+descriptor, which is the case that used to fail, and checks every line.
 
 ## Source layout
 
 | Module | Responsibility |
 | --- | --- |
-| `main.c`, `config.c` | Command-line dispatch, roster configuration, and signal handling |
+| `main.c`, `config.c` | Command-line dispatch, team and roster parsing, and signal handling |
 | `session.c`, `resources.c` | Session discovery, synchronized initialization, board locking, and IPC removal |
 | `player.c`, `roster.c` | Joining, waiting for the roster, taking turns, and leaving |
 | `movement.c`, `capture.c`, `target.c` | Legal steps, elimination, and team targeting |
+| `announce.c`, `liveness.c` | One-write output lines, and detecting dead or reused player PIDs |
 | `display.c` | Copy the board under lock and render the snapshot after unlocking |
 | `tests/` | Unit suites on a plain board, plus an integration suite over real IPC |
 

@@ -111,7 +111,7 @@ ipcs: ## List the IPC objects this user owns (read only, removes nothing)
 help: ## Show these commands
 	@echo "Usage: make [target]"
 	@awk -F ':.*## ' '/^[a-z0-9-]+:.*## / { printf "  %-12s %s\n", $$1, $$2 }' $(firstword $(MAKEFILE_LIST))
-	@echo "Run players by hand: LEMIPC_PLAYERS=4 ./lemipc <1-7>, board: ./lemipc 0"
+	@echo "Run players by hand: LEMIPC_PLAYERS=4 ./lemipc <team>, board: ./lemipc 0"
 
 clean: ## Remove object files and test binaries
 	$(MAKE) -C $(LIBFT_DIR) clean
