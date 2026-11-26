@@ -7,3 +7,7 @@ rule.md
 lemipc
 compile_commands.json
 .cache
+*.a
+tests/ipc_probe
+tests/test_*
+!tests/test_*.c
