@@ -1,9 +1,10 @@
 #!/usr/bin/env bash
 
 ROOT="$(cd -- "$(dirname -- "$0")/.." && pwd -P)" || exit 1
-BIN="$ROOT/lemipc"
+cd -- "$ROOT" || exit 1
+BIN=./lemipc
 PROBE="$ROOT/tests/ipc_probe"
-SESSION="$(mktemp -d /tmp/lemipc-demo.XXXXXX)" || exit 1
+LOG_DIR="$(mktemp -d /tmp/lemipc-demo.XXXXXX)" || exit 1
 pids=()
 logs=()
 eliminated=()
@@ -41,7 +42,7 @@ cleanup() {
 		printf 'If the board is still open, press Ctrl-C in the left terminal.\n'
 	fi
 	rm -f -- "${logs[@]}"
-	rmdir -- "$SESSION"
+	rmdir -- "$LOG_DIR"
 }
 
 fail() {
@@ -64,7 +65,7 @@ handle_interrupt() {
 # Linux ftok uses the project byte and the low bits of the device and inode.
 check_session_key() {
 	local identity device inode key
-	identity="$(stat -c '%d %i' -- "$SESSION")" || return 1
+	identity="$(stat -c '%d %i' -- .)" || return 1
 	read -r device inode <<< "$identity"
 	key=$(( (76 << 24) | ((device & 255) << 16) | (inode & 65535) ))
 	awk -v key="$key" '$1 == key { occupied = 1 } END { exit occupied }' \
@@ -75,13 +76,10 @@ start_player() {
 	local team="$1" number deadline pid log
 	number=$((${#pids[@]} + 1))
 	check_interrupt
-	log="$SESSION/player-$number.log"
+	log="$LOG_DIR/player-$number.log"
 	logs+=("$log")
 	starting_player=1
-	(
-		cd -- "$SESSION" || exit 1
-		exec env LEMIPC_PLAYERS=4 "$BIN" "$team"
-	) >"$log" 2>&1 &
+	LEMIPC_PLAYERS=4 "$BIN" "$team" >"$log" 2>&1 &
 	pid=$!
 	pids+=("$pid")
 	starting_player=0
@@ -143,14 +141,14 @@ trap 'handle_interrupt 130' INT
 trap 'handle_interrupt 143' TERM
 trap 'handle_interrupt 129' HUP
 
-check_session_key || fail "Could not confirm an unused IPC key for $SESSION."
+check_session_key || fail "Could not confirm an unused IPC key for $ROOT. Close any existing session before running the demo."
 start_player 1
-session_ids="$(cd -- "$SESSION" && "$PROBE")" || fail "Could not inspect the new session."
+session_ids="$("$PROBE")" || fail "Could not inspect the new session."
 read -r _ _ _ creator <<< "$session_ids"
 [ "$creator" = "${pids[0]}" ] || fail "The joined session was created by another process."
 
 printf '\nIn the left terminal, run this command:\n'
-printf '    (cd %q && %q 0)\n\n' "$SESSION" "$BIN"
+printf '    cd %q && ./lemipc 0\n\n' "$ROOT"
 display_invited=1
 printf 'Press Enter when the board is visible to start the 2 vs 2 match.\n'
 if ! IFS= read -r; then
@@ -159,7 +157,7 @@ if ! IFS= read -r; then
 fi
 check_interrupt
 if ! grep -qx "${pids[0]}" <<< "$(active_players)" \
-	|| [ "$(cd -- "$SESSION" && "$PROBE")" != "$session_ids" ]; then
+	|| [ "$("$PROBE")" != "$session_ids" ]; then
 	fail "The first player or its session is no longer available."
 fi
 
