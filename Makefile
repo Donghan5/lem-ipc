@@ -28,6 +28,7 @@ IPC_PROBE = $(TEST_DIR)/ipc_probe
 TEAMS ?= 1 1 2 2
 
 .DEFAULT_GOAL := all
+MAKEFLAGS += --no-print-directory
 
 all: $(NAME) ## Build lemipc (libft included)
 
@@ -42,11 +43,13 @@ $(OBJ_DIR)/%.o: src/%.c | $(OBJ_DIR)
 
 $(OBJS): inc/lemipc.h libft/libft.h libft/ft_printf/ft_printf.h
 
+# libft decides for itself whether to rebuild; -s keeps its no-op runs quiet,
+# so a second make only says there is nothing to do.
 $(PRINTF): FORCE | $(LIBFT)
-	$(MAKE) -C $(LIBFT_DIR)/ft_printf
+	@$(MAKE) -s -C $(LIBFT_DIR)/ft_printf
 
 $(LIBFT): FORCE
-	$(MAKE) -C $(LIBFT_DIR) libft.a
+	@$(MAKE) -s -C $(LIBFT_DIR) libft.a
 
 # Unit suites link the core objects, so they call the real
 # game functions directly on a plain t_board -- no shared memory needed.
