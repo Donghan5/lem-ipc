@@ -11,11 +11,14 @@ FAIL=0
 XFAIL=0
 XPASS=0
 PIDS=()
+declare -A EXPECTED_EXIT PROCESS_LOG OWNED_IPC EVAL_CHECKS EVAL_DETAILS
 
 new_match() {
 	DIR="$(mktemp -d "$WORK/t.XXXXXX")" || exit 1
 	PIDS=()
 	MATCH_PIDS=()
+	EXPECTED_EXIT=()
+	PROCESS_LOG=()
 	IPC_IDS=
 }
 
@@ -32,12 +35,13 @@ launch() {
 	PID=$!
 	PIDS+=("$PID")
 	MATCH_PIDS+=("$PID")
+	PROCESS_LOG[$PID]=${log:-child}
 }
 
 wait_for_log() {
 	local pattern="$1" file="$2" attempt
 	for ((attempt = 0; attempt < 100; attempt++)); do
-		grep -qE "$pattern" "$DIR/$file" && return 0
+		grep -qsE "$pattern" "$DIR/$file" && return 0
 		sleep 0.05
 	done
 	return 1
@@ -48,51 +52,77 @@ remember_ipc() {
 	[ -n "$IPC_IDS" ] && return 0
 	ids="$(cd "$DIR" && "$PROBE")" || return 1
 	read -r shm queue sem creator <<< "$ids"
+	[[ $shm =~ ^[0-9]+$ && $queue =~ ^[0-9]+$ && $sem =~ ^[0-9]+$ ]] || return 1
 	for pid in "${MATCH_PIDS[@]}"; do
 		if [ "$creator" = "$pid" ]; then
 			IPC_IDS="$shm $queue $sem"
+			OWNED_IPC[$IPC_IDS]=1
 			return 0
 		fi
 	done
 	return 1
 }
 
-# Match the exact IDs stored on this match's shared board.
-reap_ipc() {
-	local shm queue sem kind id flag status
-	local leaked=() errors=()
-	if [ -z "$IPC_IDS" ]; then
-		remember_ipc || { echo "session IDs unavailable"; return 2; }
-	fi
+# Inspect the recorded IDs before any fallback removal.
+inspect_ipc() {
+	local expected="$1" remove="${2:-0}" kind label id flag status result
+	local shm queue sem status_after all_absent=1 details=()
+	IPC_OK=1
 	read -r shm queue sem <<< "$IPC_IDS"
-	for kind in shm queue sem; do
+	for kind in shm sem queue; do
 		case "$kind" in
-			shm) id="$shm"; flag=m ;;
-			queue) id="$queue"; flag=q ;;
-			sem) id="$sem"; flag=s ;;
+			shm) label=SHM; id="$shm"; flag=m ;;
+			sem) label=SEM; id="$sem"; flag=s ;;
+			queue) label=MSGQ; id="$queue"; flag=q ;;
 		esac
-		"$PROBE" "$kind" "$id"
+		"$PROBE" "$kind" "$id" 2>>"$DIR/ipc-diagnostics"
 		status=$?
-		case "$status" in
-			0)
-				leaked+=("$kind:$id")
-				ipcrm "-$flag" "$id"
-				"$PROBE" "$kind" "$id"
-				[ "$?" = 1 ] || errors+=("$kind:$id still present or unreadable")
-				;;
-			1) ;;
-			*) errors+=("$kind:$id could not be inspected") ;;
-		esac
+		status_after=$status
+		result=PASS
+		if [ "$status" != "$expected" ]; then
+			result=FAIL
+			IPC_OK=0
+			printf '%s ID %s: expected probe status %s, got %s (0 = present, 1 = absent)\n' \
+				"$label" "${id:-unknown}" "$expected" "$status" >>"$DIR/ipc-diagnostics"
+			if [ "$remove" = 1 ] && [ "$status" = 0 ]; then
+				ipcrm "-$flag" "$id" >>"$DIR/ipc-diagnostics" 2>&1
+				"$PROBE" "$kind" "$id" 2>>"$DIR/ipc-diagnostics"
+				status_after=$?
+				if [ "$status_after" = 1 ]; then
+					result="FAIL (ID $id, fallback removed)"
+				else
+					result="FAIL (ID $id, fallback failed)"
+				fi
+			else
+				result="FAIL (ID ${id:-unknown})"
+			fi
+		fi
+		[ "$status_after" = 1 ] || all_absent=0
+		if [ "${VERBOSE:-0}" = 1 ]; then
+			printf '%s ID %s: %s (expected probe status %s)\n' \
+				"$label" "${id:-unknown}" "$result" "$expected" >>"$DIR/ipc-trace"
+		fi
+		details+=("$label $result")
 	done
-	if [ "${#errors[@]}" -gt 0 ]; then
-		echo "${errors[*]}"
-		return 2
+	if [ "$all_absent" = 1 ] && [ -n "$IPC_IDS" ]; then
+		unset 'OWNED_IPC[$IPC_IDS]'
 	fi
-	if [ "${#leaked[@]}" -gt 0 ]; then
-		echo "removed leaked objects: ${leaked[*]}"
-		return 1
-	fi
-	echo "shm, queue and sem absent"
+	IPC_DETAIL="${details[*]}"
+}
+
+signal_tracked() {
+	local signal="$1" pid ok=0
+	shift
+	for pid in "$@"; do
+		if kill "-$signal" "$pid" 2>/dev/null; then
+			case "$signal" in
+				KILL) EXPECTED_EXIT[$pid]=137 ;;
+			esac
+		else
+			ok=1
+		fi
+	done
+	return "$ok"
 }
 
 signal_players() {
@@ -106,7 +136,8 @@ signal_players() {
 }
 
 collect_players() {
-	local limit="$1" deadline pid status
+	local limit="$1" deadline pid status expected
+	local problems=()
 	deadline=$((SECONDS + limit))
 	while [ -n "$(jobs -pr; jobs -ps)" ] && [ "$SECONDS" -lt "$deadline" ]; do
 		sleep 0.1
@@ -115,51 +146,86 @@ collect_players() {
 	if [ -n "$(jobs -pr; jobs -ps)" ]; then
 		signal_players KILL
 		EXITS_OK=0
+		problems+=("timeout after ${limit}s")
 	fi
 	for pid in "${PIDS[@]}"; do
 		wait "$pid" 2>/dev/null
 		status=$?
-		[ "$status" = 0 ] || EXITS_OK=0
-		if [ "$pid" = "${VALGRIND_PID:-}" ]; then
-			VALGRIND_STATUS="$status"
+		expected="${EXPECTED_EXIT[$pid]:-0}"
+		if [ "$status" != "$expected" ]; then
+			EXITS_OK=0
+			problems+=("${PROCESS_LOG[$pid]} PID $pid exited $status (expected $expected)")
 		fi
 	done
 	PIDS=()
-}
+	if [ "$EXITS_OK" = 0 ]; then
+		PROCESS_RESULT=FAIL
+		printf '%s\n' "${problems[@]}" >>"$DIR/process-diagnostics"
+	elif [ "${PROCESS_RESULT:-N/A}" != FAIL ]; then
+		PROCESS_RESULT=PASS
+	fi
+} 2>/dev/null
 
 cleanup_all() {
+	local ids
 	if [ "${#PIDS[@]}" -gt 0 ]; then
 		remember_ipc
 		signal_players KILL
 		collect_players 1
-		reap_ipc >/dev/null
 	fi
+	for ids in "${!OWNED_IPC[@]}"; do
+		IPC_IDS="$ids"
+		inspect_ipc 1 1
+	done
 	rm -rf "$WORK"
 }
 trap cleanup_all EXIT
 trap 'exit 130' INT
 trap 'exit 143' TERM
 
-report() { # name result_ok known_fail note
-	local name="$1" ok="$2" known="$3" note="$4"
-	if [ "$ok" = 1 ] && [ "$known" = 1 ]; then
-		XPASS=$((XPASS + 1)); printf '  XPASS %-42s %s\n' "$name" "(known bug now fixed!)"
-	elif [ "$ok" = 1 ]; then
-		PASS=$((PASS + 1)); printf '  ok    %-42s %s\n' "$name" "$note"
-	elif [ "$known" = 1 ]; then
-		XFAIL=$((XFAIL + 1)); printf '  XFAIL %-42s %s\n' "$name" "$note"
-	else
-		FAIL=$((FAIL + 1)); printf '  FAIL  %-42s %s\n' "$name" "$note"
+color_statuses() {
+	if [[ ! -t 1 || ${TERM:-} == dumb || -n ${NO_COLOR:-} ]]; then
+		cat
+		return
 	fi
+	sed -E \
+		-e $'s/\\b(PASS|XPASS|ok)\\b/\e[32m\\1\e[0m/g' \
+		-e $'s/\\bFAIL\\b/\e[31m&\e[0m/g' \
+		-e $'s/\\b(SKIP|XFAIL)\\b/\e[33m\\1\e[0m/g' \
+		-e $'s/\\bN\/A\\b/\e[90m&\e[0m/g'
+}
+
+report() { # name result_ok known_fail note
+	local name="$1" ok="$2" known="$3" note="$4" status
+	if [ "${EVAL_MODE:-0}" = 1 ]; then
+		status=PASS
+		if [ "$ok" != 1 ]; then
+			status=FAIL
+			EVAL_FAILED=1
+		fi
+		EVAL_CHECKS[$name]="$status"
+		EVAL_DETAILS[$name]="$note"
+		if [ "${VERBOSE:-0}" = 1 ]; then
+			printf '%s %s\n' "$status" "$name" >>"$DIR/checks"
+		fi
+		return
+	fi
+	if [ "$ok" = 1 ] && [ "$known" = 1 ]; then
+		XPASS=$((XPASS + 1)); status=XPASS; note="(known bug now fixed!)"
+	elif [ "$ok" = 1 ]; then
+		PASS=$((PASS + 1)); status=ok
+	elif [ "$known" = 1 ]; then
+		XFAIL=$((XFAIL + 1)); status=XFAIL
+	else
+		FAIL=$((FAIL + 1)); status=FAIL
+	fi
+	printf '  %-5s %-42s %s\n' "$status" "$name" "$note" | color_statuses
 }
 
 check_cleanup() {
-	local name="$1" expected_fail="${2:-0}" detail status ok=0
-	detail="$(reap_ipc)"
-	status=$?
-	[ "$status" = 0 ] && ok=1
-	[ "$status" = 2 ] && expected_fail=0
-	report "$name" "$ok" "$expected_fail" "$detail"
+	local name="$1"
+	inspect_ipc 1 1
+	report "$name" "$IPC_OK" 0 "$IPC_DETAIL"
 }
 
 # Capture IPC IDs while the first player is still waiting for the roster.
@@ -200,44 +266,20 @@ test_display_without_session() {
 	report "display_without_session_fails" "$ok" 0 ""
 }
 
-# What an evaluator sees with ipcs: this user's objects of one kind (m, s, q).
-user_ipc_ids() {
-	LC_ALL=C ipcs "-$1" | awk -v user="$(id -un)" '$3 == user { print $2 }' | sort
-}
-
-# Objects of one kind that did not exist when the suite started.
-new_ipc_ids() {
-	comm -13 <(printf '%s\n' "${BASELINE[$1]}" | sed '/^$/d') <(user_ipc_ids "$1")
-}
-
-# Every object the suite created must be gone, whatever test leaked it.
-check_no_new_ipcs() {
-	local kind id leaked=() ok=0
-	for kind in m s q; do
-		for id in $(new_ipc_ids "$kind"); do
-			leaked+=("$kind:$id")
-			ipcrm "-$kind" "$id" 2>/dev/null
-		done
-	done
-	[ "${#leaked[@]}" = 0 ] && ok=1
-	report "ipcs_unchanged_after_suite" "$ok" 0 \
-		"${leaked[*]:-same objects as before the suite}"
-}
-
 test_match_and_cleanup() {
-	local ok=0 counts=""
+	local memory="${1:-0}" first_ok=0 ok=0
 	new_match
-	start_first p1.log 3 "$BIN" 1
-	launch p2.log 3 "$BIN" 1
-	launch p3.log 3 "$BIN" 2
-	if wait_for_log ' joined team ' p3.log; then
-		counts="$(new_ipc_ids m | wc -l)/$(new_ipc_ids s | wc -l)/$(new_ipc_ids q | wc -l)"
-		[ "$counts" = "1/1/1" ] && ok=1
-	fi
-	report "one_shm_sem_and_msq_per_match" "$ok" 0 "new shm/sem/msq=$counts"
-	ok=0
+	prepare_memory "$memory"
+	start_checked p1.log 3 1 && first_ok=1
+	launch_checked p2.log 3 1
+	launch_checked p3.log 3 2
+	wait_for_log ' joined team ' p3.log
+	inspect_ipc 0
+	[ "$first_ok" = 1 ] && ok=$IPC_OK
+	report "one_shm_sem_and_msq_per_match" "$ok" 0 "$IPC_DETAIL"
 	collect_players 60
-	grep -qh '^Team 1 wins$' "$DIR"/p*.log && ok=$EXITS_OK
+	ok=0
+	grep -qh '^Team 1 wins$' "$DIR/p1.log" "$DIR/p2.log" && ok=$EXITS_OK
 	report "match_declares_a_winner" "$ok" 0 ""
 	ok=0
 	grep -q '^Player [0-9]* was eliminated$' "$DIR/p3.log" && ok=1
@@ -245,15 +287,17 @@ test_match_and_cleanup() {
 	check_cleanup "ipcs_clean_after_normal_match"
 }
 
-# Every terminating signal a user can send by accident must still clean up.
 test_signal_withdraws() {
-	local signal="$1" name="${1,,}"
+	local signal="$1" name="${1,,}" ready=0 sent=0
 	new_match
-	start_first s1.log 4 "$BIN" 1
-	launch s2.log 4 "$BIN" 2
-	wait_for_log ' joined team ' s2.log
-	signal_players "$signal"
+	prepare_memory "${EVAL_MODE:-0}"
+	start_checked s1.log 4 1 && ready=1
+	launch_checked s2.log 4 2
+	if wait_for_log ' joined team ' s2.log && signal_tracked "$signal" "${PIDS[@]}"; then
+		sent=1
+	fi
 	collect_players 5
+	[ "$ready" = 1 ] && [ "$sent" = 1 ] || EXITS_OK=0
 	report "sig${name}_stops_every_player" "$EXITS_OK" 0 ""
 	check_cleanup "ipcs_clean_after_sig${name}_withdrawal"
 }
@@ -351,31 +395,24 @@ test_cleanup_after_sigkill() {
 }
 
 test_sigkill_during_match() {
-	local victim status winner=0
-	local runner=("$BIN")
-	if command -v valgrind >/dev/null; then
-		runner=(valgrind -q --leak-check=full
-			--errors-for-leak-kinds=definite,indirect,possible --error-exitcode=42 "$BIN")
-	fi
+	local victim winner=0 ready=0 killed=0
 	new_match
-	start_first survivor.log 2 "${runner[@]}" 1
+	prepare_memory 1 "survivor only"
+	start_checked survivor.log 2 1 && ready=1
 	launch victim.log 2 "$BIN" 2
 	victim=$PID
-	if wait_for_log ' moved$' victim.log && kill -KILL "$victim"; then
-		wait "$victim" 2>/dev/null
-		status=$?
-		if [ "$status" = 137 ]; then
-			PIDS=("${PIDS[0]}")
-			collect_players 10
-			grep -qx 'Team 1 wins' "$DIR/survivor.log" && winner=$EXITS_OK
-		fi
+	if wait_for_log ' moved$' victim.log && signal_tracked KILL "$victim"; then
+		killed=1
+	else
+		signal_players INT
 	fi
-	if [ "${#PIDS[@]}" -gt 0 ]; then
-		signal_players KILL
-		collect_players 1
+	collect_players 10
+	if [ "$ready" = 1 ] && [ "$killed" = 1 ] && grep -qx 'Team 1 wins' "$DIR/survivor.log"; then
+		winner=$EXITS_OK
 	fi
 	report "sigkill_during_match_survivor_wins" "$winner" 0 ""
 	check_cleanup "ipc_cleanup_after_running_sigkill"
+	finish_memory
 }
 
 # The victim's parent execs sleep, which never calls wait(): once killed, the
@@ -435,26 +472,23 @@ test_stale_session_replaced() {
 }
 
 test_display_closes_last() {
-	local player shm queue sem attached=0 closed=0
+	local player ready=0 attached=0 killed=0 closed=0
 	new_match
-	start_first display-player.log 4 "$BIN" 1
+	prepare_memory "${EVAL_MODE:-0}" "display; killed player N/A"
+	start_first display-player.log 4 "$BIN" 1 && ready=1
 	player=$PID
-	launch last-display.log 4 "$BIN" 0
+	launch_checked last-display.log 4 0
 	if wait_for_log 'Waiting for players' last-display.log; then
-		read -r shm queue sem <<< "$IPC_IDS"
-		if "$PROBE" shm "$shm" && "$PROBE" queue "$queue" \
-			&& "$PROBE" sem "$sem"; then
-			attached=1
-		fi
-	fi
-	if kill -KILL "$player"; then
-		wait "$player" 2>/dev/null
-		if [ "$?" = 137 ]; then
-			PIDS=("$PID")
-		fi
+		inspect_ipc 0
+		[ "$ready" = 1 ] && attached=$IPC_OK
+		signal_tracked KILL "$player" && killed=1
+	else
+		signal_players INT
 	fi
 	collect_players 5
-	grep -qx 'Session closed.' "$DIR/last-display.log" && closed=$EXITS_OK
+	if [ "$killed" = 1 ] && grep -qx 'Session closed.' "$DIR/last-display.log"; then
+		closed=$EXITS_OK
+	fi
 	report "display_renders_while_player_is_attached" "$attached" 0 ""
 	report "last_display_exits_after_player_sigkill" "$closed" 0 ""
 	check_cleanup "ipc_cleanup_after_last_display"
@@ -483,39 +517,29 @@ test_output_not_garbled() {
 
 test_valgrind_match() {
 	if ! command -v valgrind >/dev/null; then
-		printf '  skip  %-42s %s\n' "valgrind_clean_match" "(valgrind not installed)"
+		printf '  SKIP  %-42s %s\n' "valgrind_clean_match" "(valgrind not installed)" | color_statuses
 		return
 	fi
-	local ok=0
-	new_match
-	start_first v.log 3 valgrind -q --leak-check=full \
-		--errors-for-leak-kinds=definite,indirect,possible --error-exitcode=42 "$BIN" 1
-	VALGRIND_PID=$PID
-	launch v2.log 3 "$BIN" 1
-	launch v3.log 3 "$BIN" 2
-	collect_players 120
-	[ "$VALGRIND_STATUS" = 0 ] && ok=$EXITS_OK
-	report "valgrind_clean_match" "$ok" 0 "exit=$VALGRIND_STATUS"
-	unset VALGRIND_PID VALGRIND_STATUS
-	check_cleanup "ipcs_clean_after_valgrind"
+	test_match_and_cleanup 1
+	finish_memory
 }
 
 # `lemipc N | head -1` closes stdout under the player: the next line it prints
 # raises SIGPIPE, which must end the match cleanly instead of killing it.
 test_closed_stdout_cleans_up() {
-	local ids status ok=0
+	local ready=0 ok=0
 	new_match
-	launch "" 2 sh -c '"$0" 1 | head -1 >/dev/null' "$BIN"
-	launch "" 2 sh -c '"$0" 2 | head -1 >/dev/null' "$BIN"
-	collect_players 15
-	ids="$(cd "$DIR" && "$PROBE")"
-	status=$?
-	[ "$status" = 1 ] && ok=$EXITS_OK
-	if [ "$status" = 0 ]; then
-		IPC_IDS="${ids% *}"
-		reap_ipc >/dev/null
+	if mkfifo "$DIR/p1.fifo" "$DIR/p2.fifo"; then
+		launch p1.log 2 head -n 1 p1.fifo
+		launch "" 2 sh -c 'exec "$1" 1 >p1.fifo' sh "$BIN"
+		wait_for_log ' joined team ' p1.log && remember_ipc && ready=1
+		launch p2.log 2 head -n 1 p2.fifo
+		launch "" 2 sh -c 'exec "$1" 2 >p2.fifo' sh "$BIN"
+		collect_players 15
+		[ "$ready" = 1 ] && ok=$EXITS_OK
 	fi
-	report "closed_stdout_ends_match_cleanly" "$ok" 0 "probe=$status (1 = no session left)"
+	report "closed_stdout_ends_match_cleanly" "$ok" 0 ""
+	check_cleanup "ipcs_clean_after_closed_stdout"
 }
 
 # Two players of one team die in the same instant: the survivors must reap
@@ -548,43 +572,291 @@ test_simultaneous_deaths() {
 # SIGKILL cannot be caught, so a match where everyone is killed leaves its
 # session behind; the next run in that directory must reclaim it and play.
 test_all_killed_then_rerun() {
-	local stale_ids rerun_ids left=0 replayed=0
+	local stale_ids rerun_ids ready=0 killed=0 replayed=0
 	new_match
-	start_first k1.log 4 "$BIN" 1
+	prepare_memory "${EVAL_MODE:-0}" "replay players; killed players N/A"
+	start_first k1.log 4 "$BIN" 1 && ready=1
 	launch k2.log 4 "$BIN" 1
 	launch k3.log 4 "$BIN" 2
 	launch k4.log 4 "$BIN" 2
-	if wait_for_log ' moved$' k4.log; then
-		# bash reports every SIGKILLed job on stderr; the status is what counts.
-		{ signal_players KILL; collect_players 5; } 2>/dev/null
-		( cd "$DIR" && "$PROBE" >/dev/null ) && left=1
-		stale_ids=$IPC_IDS
-		IPC_IDS=
-		start_first r1.log 3 "$BIN" 1
-		launch r2.log 3 "$BIN" 1
-		launch r3.log 3 "$BIN" 2
-		collect_players 60
-		grep -qx 'Team 1 wins' "$DIR"/r*.log && [ -n "$IPC_IDS" ] \
-			&& [ "$IPC_IDS" != "$stale_ids" ] && replayed=$EXITS_OK
+	if wait_for_log ' moved$' k4.log && signal_tracked KILL "${PIDS[@]}"; then
+		killed=1
+	else
+		signal_players INT
 	fi
-	report "running_session_left_by_sigkill" "$left" 0 "(expected: nothing can clean up)"
-	report "rerun_after_sigkill_plays_full_match" "$replayed" 0 ""
+	collect_players 5
+	[ "$EXITS_OK" = 1 ] && [ "$ready" = 1 ] || killed=0
+	report "all_players_killed_and_reaped" "$killed" 0 ""
+	inspect_ipc 0
+	report "running_session_left_by_sigkill" "$IPC_OK" 0 "${EVAL_MODE:+$IPC_DETAIL}"
+	stale_ids=$IPC_IDS
+	IPC_IDS=
+	start_checked r1.log 3 1
 	rerun_ids=$IPC_IDS
 	IPC_IDS=$stale_ids
 	check_cleanup "killed_running_session_reclaimed"
 	IPC_IDS=$rerun_ids
+	launch_checked r2.log 3 1
+	launch_checked r3.log 3 2
+	collect_players 60
+	if grep -qx 'Team 1 wins' "$DIR/r1.log" "$DIR/r2.log" && [ -n "$IPC_IDS" ] \
+		&& [ "$IPC_IDS" != "$stale_ids" ]; then
+		replayed=$EXITS_OK
+	fi
+	report "rerun_after_sigkill_plays_full_match" "$replayed" 0 ""
 	check_cleanup "ipcs_clean_after_rerun"
 }
+
+prepare_memory() {
+	MEMORY_CHECKS=()
+	MEMORY_RESULT=N/A
+	MEMORY_ENABLED=0
+	MEMORY_LABEL="${2:-}"
+	if [ "$1" = 1 ]; then
+		if command -v valgrind >/dev/null; then
+			MEMORY_ENABLED=1
+		else
+			MEMORY_RESULT="SKIP (Valgrind unavailable${MEMORY_LABEL:+; $MEMORY_LABEL})"
+		fi
+	fi
+}
+
+launch_checked() {
+	local log="$1" expected="$2" team="$3"
+	local runner=("$BIN")
+	if [ "$MEMORY_ENABLED" = 1 ]; then
+		MEMORY_CHECKS+=("${log%.log}")
+		runner=(env LC_ALL=C valgrind --leak-check=full --show-leak-kinds=definite,indirect,possible
+			--errors-for-leak-kinds=definite,indirect,possible --error-exitcode=42
+			"--log-file=$DIR/${log%.log}.vg" "$BIN")
+	fi
+	launch "$log" "$expected" "${runner[@]}" "$team"
+}
+
+start_checked() {
+	launch_checked "$@"
+	wait_for_log ' joined team ' "$1" && remember_ipc
+}
+
+valgrind_counts() {
+	awk '
+		/All heap blocks were freed/ { definite = indirect = possible = 0 }
+		/definitely lost:/ { definite = $4 }
+		/indirectly lost:/ { indirect = $4 }
+		/possibly lost:/ { possible = $4 }
+		/ERROR SUMMARY:/ { errors = $4 }
+		END {
+			gsub(/,/, "", errors); gsub(/,/, "", definite)
+			gsub(/,/, "", indirect); gsub(/,/, "", possible)
+			print errors == "" ? "unknown" : errors,
+				definite == "" ? "unknown" : definite,
+				indirect == "" ? "unknown" : indirect,
+				possible == "" ? "unknown" : possible
+		}
+	' "$1"
+}
+
+finish_memory() {
+	local process errors definite indirect possible counts
+	local findings=()
+	if [ "$MEMORY_ENABLED" = 0 ]; then
+		if [ "$MEMORY_RESULT" != N/A ] && [ "${EVAL_MODE:-0}" = 0 ]; then
+			printf '  %s\n' "$MEMORY_RESULT" | color_statuses
+		fi
+		return
+	fi
+	for process in "${MEMORY_CHECKS[@]}"; do
+		counts="$(valgrind_counts "$DIR/$process.vg" 2>/dev/null)" || counts="unknown unknown unknown unknown"
+		read -r errors definite indirect possible <<< "$counts"
+		if [ "$errors $definite $indirect $possible" != "0 0 0 0" ]; then
+			findings+=("$process: errors=$errors, definite=${definite}B, indirect=${indirect}B, possible=${possible}B")
+			cat "$DIR/$process.vg" >>"$DIR/memory-diagnostics" 2>/dev/null
+		fi
+	done
+	if [ "${#findings[@]}" -gt 0 ]; then
+		MEMORY_RESULT="FAIL (${findings[*]})"
+		report "valgrind_memory_check" 0 0 "$MEMORY_RESULT"
+		if [ "${EVAL_MODE:-0}" = 0 ]; then
+			cat "$DIR/memory-diagnostics"
+		fi
+	else
+		MEMORY_RESULT="PASS (${MEMORY_LABEL:-${MEMORY_CHECKS[*]}})"
+		report "valgrind_memory_check" 1 0 "$MEMORY_RESULT"
+	fi
+}
+
+EVAL_SCENARIOS=(normal-win sigint-withdrawal sigkill-survivor all-killed-recovery display-last)
+EVAL_TITLES=(
+	"Normal match"
+	"Ctrl-C withdrawal (SIGINT)"
+	"Kill one player (SIGKILL)"
+	"Kill all players and restart"
+	"Display exits last"
+)
+EVAL_EXPECTED=(
+	"Team 1 wins, team 2 is eliminated, and the players remove all IPC."
+	"Both players exit normally after SIGINT and remove all IPC."
+	"After play starts, the victim exits on SIGKILL and the survivor wins and removes all IPC."
+	"After play starts, SIGKILL leaves all three IDs behind. Relaunch in the same directory, reclaim those IDs, and finish a new match."
+	"The display renders while the player is attached, then closes and removes all IPC after the player is killed."
+)
+
+list_eval() {
+	local i
+	for i in "${!EVAL_SCENARIOS[@]}"; do
+		[ "$i" = 0 ] || printf '\n'
+		printf '[%d] %s (%s)\n    %s\n' "$((i + 1))" "${EVAL_TITLES[$i]}" \
+			"${EVAL_SCENARIOS[$i]}" "${EVAL_EXPECTED[$i]}"
+	done
+}
+
+print_eval_check() {
+	local label="$1" check="$2" success="$3" failure="$4"
+	if [ "${EVAL_CHECKS[$check]}" = PASS ]; then
+		printf '    %-8s %s\n' "$label" "$success"
+	else
+		printf '    %-8s FAIL: %s%s\n' "$label" "$failure" "${EVAL_DETAILS[$check]:+ ${EVAL_DETAILS[$check]}}"
+	fi
+}
+
+print_eval_game() {
+	case "$1" in
+		normal-win)
+			print_eval_check Game: match_declares_a_winner 'Team 1 won.' 'Team 1 win was not confirmed.'
+			print_eval_check '' losing_player_is_eliminated 'The team 2 player was eliminated.' 'Team 2 elimination was not confirmed.'
+			if [ "${EVAL_CHECKS[one_shm_sem_and_msq_per_match]}" = FAIL ]; then
+				print_eval_check IPC: one_shm_sem_and_msq_per_match '' 'Could not verify all three IPC resources during play.'
+			fi
+			;;
+		sigint-withdrawal)
+			print_eval_check Game: sigint_stops_every_player 'Both players exited normally after Ctrl-C.' 'Could not confirm both players withdrew normally after SIGINT.'
+			;;
+		sigkill-survivor)
+			print_eval_check Game: sigkill_during_match_survivor_wins 'One player was killed. The survivor won.' 'Could not confirm the SIGKILL and survivor win.'
+			;;
+		all-killed-recovery)
+			print_eval_check Game: all_players_killed_and_reaped 'All players in the running match were killed and reaped.' 'Could not confirm all players were killed and reaped.'
+			print_eval_check '' rerun_after_sigkill_plays_full_match 'Team 1 won the replay.' 'Could not confirm a completed replay with fresh IPC IDs.'
+			;;
+		display-last)
+			print_eval_check Game: display_renders_while_player_is_attached 'The display rendered while the player was attached.' 'Could not verify the display rendered with a player attached.'
+			print_eval_check '' last_display_exits_after_player_sigkill 'After the player was killed, the display closed last.' 'Could not confirm the display closed after the player was killed.'
+			;;
+	esac
+}
+
+print_eval_ipc() {
+	local cleanup
+	case "$1" in
+		normal-win) cleanup=ipcs_clean_after_normal_match ;;
+		sigint-withdrawal) cleanup=ipcs_clean_after_sigint_withdrawal ;;
+		sigkill-survivor) cleanup=ipc_cleanup_after_running_sigkill ;;
+		display-last) cleanup=ipc_cleanup_after_last_display ;;
+		all-killed-recovery)
+			print_eval_check IPC: running_session_left_by_sigkill 'Old SHM, SEM and MSGQ remained after SIGKILL.' 'Old resources after SIGKILL.'
+			print_eval_check '' killed_running_session_reclaimed 'The restart removed the old SHM, SEM and MSGQ.' 'Old resources on restart.'
+			print_eval_check '' ipcs_clean_after_rerun 'The replay removed its new SHM, SEM and MSGQ at exit.' 'New resources at replay exit.'
+			return
+			;;
+	esac
+	print_eval_check IPC: "$cleanup" 'SHM, SEM and MSGQ removed at exit.' 'Resource cleanup at exit.'
+}
+
+print_eval_logs() {
+	local log
+	for log in "$DIR"/process-diagnostics "$DIR"/ipc-diagnostics "$DIR"/memory-diagnostics; do
+		[ -s "$log" ] || continue
+		printf '    %s\n' "${log##*/}"
+		sed 's/^/        /' "$log"
+	done
+	if [ "${VERBOSE:-0}" = 1 ]; then
+		printf '    Checks:\n'
+		sed 's/^/        /' "$DIR/checks" | color_statuses
+		for log in "$DIR"/*.log "$DIR"/*.vg "$DIR"/ipc-trace; do
+			[ -f "$log" ] || continue
+			printf '    %s\n' "${log##*/}"
+			sed 's/^/        /' "$log"
+		done
+	fi
+}
+
+run_eval_scenario() {
+	local i="$1" name
+	name="${EVAL_SCENARIOS[$i]}"
+	EVAL_FAILED=0
+	EVAL_CHECKS=()
+	EVAL_DETAILS=()
+	PROCESS_RESULT=N/A
+	case "$name" in
+		normal-win) test_match_and_cleanup 1 ;;
+		sigint-withdrawal) test_signal_withdraws INT ;;
+		sigkill-survivor) test_sigkill_during_match ;;
+		all-killed-recovery) test_all_killed_then_rerun ;;
+		display-last) test_display_closes_last ;;
+	esac
+	if [ "$name" != sigkill-survivor ]; then
+		finish_memory
+	fi
+	EVAL_RESULT=PASS
+	if [ "$EVAL_FAILED" = 1 ] || [ "$PROCESS_RESULT" != PASS ]; then
+		EVAL_RESULT=FAIL
+	elif [[ $MEMORY_RESULT == SKIP* ]]; then
+		EVAL_RESULT=SKIP
+	fi
+	{
+		printf '[%d] %s — %s\n' "$((i + 1))" "${EVAL_TITLES[$i]}" "$EVAL_RESULT"
+		print_eval_game "$name"
+		if [ "$PROCESS_RESULT" != PASS ]; then
+			printf '    Process: %s\n' "$PROCESS_RESULT"
+		fi
+		printf '    Memory:  Valgrind %s\n' "${MEMORY_RESULT/Valgrind unavailable/unavailable}"
+		print_eval_ipc "$name"
+	} | color_statuses
+	print_eval_logs
+}
+
+run_eval() {
+	local selected="$1" i passed=0 failed=0 skipped=0 total=0
+	EVAL_MODE=1
+	for i in "${!EVAL_SCENARIOS[@]}"; do
+		if [ -z "$selected" ] || [ "$selected" = "${EVAL_SCENARIOS[$i]}" ]; then
+			[ "$total" = 0 ] || printf '\n'
+			run_eval_scenario "$i"
+			total=$((total + 1))
+			case "$EVAL_RESULT" in
+				PASS) passed=$((passed + 1)) ;;
+				FAIL) failed=$((failed + 1)) ;;
+				SKIP) skipped=$((skipped + 1)) ;;
+			esac
+		fi
+	done
+	if [ "$total" = 0 ]; then
+		printf 'Unknown scenario "%s". Run make eval-list.\n' "$selected" >&2
+		return 2
+	fi
+	if [ -z "$selected" ]; then
+		printf '\n%d of %d scenarios passed.' "$passed" "$total"
+		[ "$failed" = 0 ] || printf ' %d failed.' "$failed"
+		[ "$skipped" = 0 ] || printf ' %d skipped.' "$skipped"
+		printf '\n'
+	fi
+	[ "$failed" = 0 ]
+}
+
+if [ "${1:-}" = --eval-list ]; then
+	list_eval
+	exit 0
+fi
 
 if [ ! -x "$BIN" ] || [ ! -x "$PROBE" ]; then
 	echo "integration: build lemipc and ipc_probe with make integration" >&2
 	exit 1
 fi
 
-declare -A BASELINE
-for kind in m s q; do
-	BASELINE[$kind]="$(user_ipc_ids "$kind")"
-done
+if [ "${1:-}" = --eval ]; then
+	run_eval "${2:-}"
+	exit "$?"
+fi
 
 echo "== integration: real processes + System V IPC =="
 test_invalid_args
@@ -606,7 +878,6 @@ test_all_killed_then_rerun
 test_display_closes_last
 test_output_not_garbled
 test_valgrind_match
-check_no_new_ipcs
 
 echo
 echo "-- integration: $PASS passed, $FAIL failed, $XFAIL xfail (known bugs), $XPASS xpass"

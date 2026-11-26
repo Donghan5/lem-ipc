@@ -18,12 +18,28 @@ Start the first command and wait for its join message before starting the others
 
 Players check for elimination before each turn. They move one tile up, down, left, or right when a legal move is available, with one second between turns. A player is eliminated when two or more adjacent players belong to the same opposing team. Diagonal neighbors count for elimination. Teammates exchange target coordinates, and the last team remaining wins.
 
+## Two-terminal demo
+
+1. In the right terminal, run `make demo` from the repository.
+2. In the left terminal, paste the command printed by the demo. It will look
+   like `(cd /tmp/lemipc-demo.ABC123 && /absolute/path/to/lemipc 0)`.
+3. When the board shows `Waiting for players (1/4)`, press Enter in the right
+   terminal to start the 2 vs 2 match. Watch the board on the left and the
+   joins, eliminations, and winner on the right. Press Ctrl-C in the left
+   terminal to close the board when you finish.
+
+A player is eliminated when at least two adjacent players belong to the same opposing team, and diagonals count.
+
 ## Tests
 
 ```sh
 make test          # unit and integration suites
 make unit          # game rules and focused System V IPC tests
 make integration   # real processes and real System V IPC
+make eval-list      # scenario names and expected behavior
+make eval SCENARIO=sigkill-survivor
+make eval           # run all evaluation scenarios
+make eval SCENARIO=normal-win VERBOSE=1  # include full logs
 ```
 
 `make unit` links the core objects from `obj/src/` without `main.o`, so the suites call
@@ -43,8 +59,10 @@ and removes any of those objects that survive the match.
 The integration suite checks IPC cleanup after `SIGINT`, after a player is
 killed during a match, after the display exits last, and when a new run
 replaces a session whose last process was killed. When Valgrind is installed,
-it checks the first player in a normal match and the survivor in the
-in-progress `SIGKILL` test. The harness checks kernel IPC IDs separately.
+it checks all players in a normal match and the survivor in the in-progress
+`SIGKILL` test. Evaluation reports process exits, Valgrind checks, and the
+outcome for each kernel IPC object. The recovery scenario kills players
+after the session is initialized and play has started.
 
 One integration test is marked `XFAIL` because it records a known defect:
 
@@ -67,13 +85,6 @@ test launches them that way.
 
 When the defect is fixed the suite prints `XPASS`; drop that test's
 known-fail flag in `tests/run_integration.sh` at that point.
-
-Files under `tests/` are deliberately outside 42 Norm scope, since they are not
-part of the turn-in. Check the submitted sources with:
-
-```sh
-norminette src inc libft
-```
 
 ## Source layout
 

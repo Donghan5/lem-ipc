@@ -23,6 +23,7 @@ TEST_BINS = $(TEST_DIR)/test_rules $(TEST_DIR)/test_roster \
             $(TEST_DIR)/test_ipc_lifecycle
 INTEGRATION = $(TEST_DIR)/run_integration.sh
 IPC_PROBE = $(TEST_DIR)/ipc_probe
+export SCENARIO VERBOSE
 
 # make play TEAMS="1 1 1 2 2 2": one player per entry, all in this directory.
 TEAMS ?= 1 1 2 2
@@ -68,10 +69,19 @@ unit: $(TEST_BINS) ## Run the unit test suites
 		./$$suite || status=1; \
 	done; exit $$status
 
-integration: $(NAME) $(IPC_PROBE) ## Run real-process tests, ipcs checked before and after
+integration: $(NAME) $(IPC_PROBE) ## Run real-process tests and check session IPC
 	@$(INTEGRATION)
 
+eval-list: ## List the evaluation scenarios
+	@$(INTEGRATION) --eval-list
+
+eval: $(NAME) $(IPC_PROBE) ## Run evaluation scenarios (optionally SCENARIO=<name>)
+	@$(INTEGRATION) --eval "$$SCENARIO"
+
 test: unit integration ## Run unit + integration (about 2 minutes)
+
+demo: $(NAME) $(IPC_PROBE) ## Run the two-terminal evaluation demo
+	@./scripts/demo.sh
 
 play: $(NAME) ## Start one player per TEAMS entry and show the board; Ctrl+C leaves
 	@./scripts/play.sh $(TEAMS)
@@ -81,7 +91,7 @@ ipcs: ## List the IPC objects this user owns (read only, removes nothing)
 
 help: ## Show these commands
 	@echo "Usage: make [target]"
-	@awk -F ':.*## ' '/^[a-z]+:.*## / { printf "  %-12s %s\n", $$1, $$2 }' $(firstword $(MAKEFILE_LIST))
+	@awk -F ':.*## ' '/^[a-z-]+:.*## / { printf "  %-12s %s\n", $$1, $$2 }' $(firstword $(MAKEFILE_LIST))
 	@echo "Run players by hand: LEMIPC_PLAYERS=4 ./lemipc <1-7>, board: ./lemipc 0"
 
 clean: ## Remove object files and test binaries
@@ -99,4 +109,4 @@ re: fclean ## Rebuild from scratch
 
 FORCE:
 
-.PHONY: all clean fclean re test unit integration play ipcs help FORCE
+.PHONY: all clean fclean re test unit integration eval eval-list demo play ipcs help FORCE

@@ -1,5 +1,16 @@
 #include "harness.h"
 
+static int	use_color(void)
+{
+	const char	*term;
+	const char	*no_color;
+
+	term = getenv("TERM");
+	no_color = getenv("NO_COLOR");
+	return (isatty(STDOUT_FILENO) && (!no_color || !*no_color)
+		&& (!term || ft_strncmp(term, "dumb", sizeof("dumb")) != 0));
+}
+
 void	suite_start(t_suite *suite, const char *name)
 {
 	suite->name = name;
@@ -13,11 +24,13 @@ void	check(t_suite *suite, const char *label, int got, int want)
 	if (got == want)
 	{
 		suite->passed++;
-		ft_printf("  ok   %s\n", label);
+		ft_printf("  %s   %s\n",
+			use_color() ? "\033[32mok\033[0m" : "ok", label);
 		return ;
 	}
 	suite->failed++;
-	ft_printf("  FAIL %s (got %d, want %d)\n", label, got, want);
+	ft_printf("  %s %s (got %d, want %d)\n",
+		use_color() ? "\033[31mFAIL\033[0m" : "FAIL", label, got, want);
 }
 
 int	suite_end(t_suite *suite)
