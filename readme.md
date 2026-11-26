@@ -31,7 +31,7 @@ When you use a custom roster size, start the first command and wait for its join
 
 ## Make targets
 
-`make help` prints the same list, grouped the same way, with examples.
+`make help` prints the same list, grouped the same way. `make help T=<target>` prints the details of one target, like a command's `--help`: its variables, what it checks, and examples (for instance `make help T=demo`). The text lives in `#>` lines right above each rule in the Makefile.
 
 **Build**
 
@@ -46,7 +46,7 @@ When you use a custom roster size, start the first command and wait for its join
 
 | Target | What it does | Time |
 | --- | --- | --- |
-| `make test` | `unit` + `integration` | about 2 min |
+| `make test` | `unit` + `integration` | about 2–3 min |
 | `make unit` | Six unit suites: rules, roster, movement, config, IPC, IPC lifecycle | seconds |
 | `make ipc-test` | Only the IPC unit suite: creation failures and team target messages | seconds |
 | `make integration` | Real processes over real System V IPC | about 2 min |
@@ -69,7 +69,7 @@ Scenarios: `normal-win`, `sigint-withdrawal`, `sigkill-survivor`, `all-killed-re
 | `make demo [NTEAMS=2-7] [KILL=1]` | Two-terminal demo with `NTEAMS` teams of two players (default 2). `KILL=1` sends SIGKILL to one team 2 player during the match and shows recovery. See below. |
 | `make play [TEAMS="..."]` | One background player per entry (default `1 1 2 2`), board on screen, logs in `logs/` |
 | `make ipcs` | IPC objects owned by this user, with their role. Read only. |
-| `make help` | This list, plus how to run players by hand |
+| `make help [T=<target>]` | This list, or the details of one target |
 
 `clean`, `fclean`, and `re` never touch IPC objects, and no target removes them for you, so a leak stays visible to `ipcs`.
 
