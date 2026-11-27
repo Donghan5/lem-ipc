@@ -186,17 +186,41 @@ descriptor, which is the case that used to fail, and checks every line.
 | `display.c` | Copy the board under lock and render the snapshot after unlocking |
 | `tests/` | Unit suites on a plain board, plus an integration suite over real IPC |
 
+## Code flow
+
+Click the diagram to open it at full resolution.
+
+[![lem-ipc code flowchart](flow-chart.png)](flow-chart.png)
+
+## Semaphore and IPC recovery
+
+The directory lock serializes session creation, attachment, and cleanup.
+The System V semaphore starts at 1 and serializes access to the shared board.
+A player acquires it with `-1` and releases it with `+1`, both using
+`SEM_UNDO`. On normal release the adjustments cancel. If a process exits
+while holding the lock, the kernel applies its outstanding adjustment so
+another process can acquire the semaphore. [Linux semop(2)](https://man7.org/linux/man-pages/man2/semop.2.html)
+
+`SEM_UNDO` records semaphore adjustments only. Shared-memory writes are
+ordinary memory operations, and the kernel has no record of which writes
+belong to one game move. If `SIGKILL` arrives between writing the destination
+tile and updating the player's recorded position, the lock becomes available
+while the board can still contain a partial move. Recovering that state
+requires application-level logic. [Linux semop(2)](https://man7.org/linux/man-pages/man2/semop.2.html) · [Linux signal(7)](https://man7.org/linux/man-pages/man7/signal.7.html)
+
 The last process attached to the board, including the display, removes the
-IPC resources when it exits through the normal cleanup path. If every
-attached process is killed after initialization, the next invocation in the
-same directory removes the abandoned session. A segment with an incompatible
-board size is rejected with `EINVAL`.
+message queue, semaphore, and shared-memory segment when it exits through
+the normal cleanup path. If every attached process is killed, the next
+player started in the same directory reclaims the abandoned session.
+A segment with an incompatible board size is rejected with `EINVAL`.
 
 During play, surviving players remove slots whose recorded PIDs no longer
 exist. A killed process can still appear to exist while it is a zombie, until
 its parent reaps it. The display checks its local snapshot and closes once all
 players recorded in that snapshot are gone.
 
-A `SIGKILL` during initialization can leave private IPC objects behind if it
-arrives before the shared segment is created or before its header is fully
-initialized. The next run cannot reliably identify those objects for cleanup.
+The semaphore, message queue, and shared-memory segment use the same
+`ftok(".", 'L')` key. If initialization is interrupted by `SIGKILL`, the
+next player can use that key to remove a leftover semaphore and message
+queue even if the shared-memory segment was never created or its header
+was never written.
