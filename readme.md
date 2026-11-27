@@ -4,6 +4,8 @@ A 42 project in which each player runs in its own process. Players share a board
 
 ## Run a match
 
+**Linux only.** `lemipc` uses `semtimedop()` for semaphore waits and `/proc/<pid>/stat` to identify running player processes.
+
 Build with `make`.
 
 **Run every process of a match from the same working directory.** The session key comes from `ftok(".")`, so the directory is the game: players started in another directory join a different session, and the display finds no session at all.
