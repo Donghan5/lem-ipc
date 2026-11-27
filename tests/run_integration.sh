@@ -302,6 +302,32 @@ test_signal_withdraws() {
 	check_cleanup "ipcs_clean_after_sig${name}_withdrawal"
 }
 
+# SIGINT while a 2 vs 2 match is running, not while waiting for the roster:
+# every player leaves through the normal path and the last one removes IPC.
+test_sigint_during_match() {
+	local memory="${1:-0}" running=0 attempt
+	new_match
+	prepare_memory "$memory"
+	start_checked run1.log 4 1
+	launch_checked run2.log 4 2
+	launch run3.log 4 "$BIN" 1
+	launch run4.log 4 "$BIN" 2
+	for ((attempt = 0; attempt < 200; attempt++)); do
+		grep -qs ' moved$' "$DIR"/run*.log && break
+		sleep 0.05
+	done
+	# Running means someone has moved and nobody has won yet.
+	if grep -qs ' moved$' "$DIR"/run*.log \
+		&& ! grep -qs -e ' wins$' -e ' eliminated$' "$DIR"/run*.log; then
+		running=1
+	fi
+	signal_players INT
+	collect_players 10
+	report "sigint_during_match_was_running" "$running" 0 ""
+	report "sigint_during_match_stops_every_player" "$EXITS_OK" 0 ""
+	check_cleanup "ipcs_clean_after_running_sigint"
+}
+
 test_over_join_refused() {
 	local ok=0
 	new_match
@@ -769,13 +795,15 @@ test_all_killed_then_rerun() {
 	report "running_session_left_by_sigkill" "$IPC_OK" 0 "${EVAL_MODE:+$IPC_DETAIL}"
 	stale_ids=$IPC_IDS
 	IPC_IDS=
-	start_checked r1.log 3 1
+	# The replay only has to prove that a fresh session starts, finishes and
+	# cleans up. A chase between two teams can run past any timeout, so the
+	# replay is two team 1 players: the match ends with a winner on the join.
+	start_checked r1.log 2 1
 	rerun_ids=$IPC_IDS
 	IPC_IDS=$stale_ids
 	check_cleanup "killed_running_session_reclaimed"
 	IPC_IDS=$rerun_ids
-	launch_checked r2.log 3 1
-	launch_checked r3.log 3 2
+	launch_checked r2.log 2 1
 	collect_players 60
 	if grep -qx 'Team 1 wins' "$DIR/r1.log" "$DIR/r2.log" && [ -n "$IPC_IDS" ] \
 		&& [ "$IPC_IDS" != "$stale_ids" ]; then
@@ -873,11 +901,12 @@ finish_memory() {
 	esac
 }
 
-EVAL_SCENARIOS=(normal-win sigint-withdrawal sigkill-survivor all-killed-recovery display-last
-	large-teams one-on-one-stalemate)
+EVAL_SCENARIOS=(normal-win sigint-withdrawal sigint-running sigkill-survivor all-killed-recovery
+	display-last large-teams one-on-one-stalemate)
 EVAL_TITLES=(
 	"Normal match"
 	"Ctrl-C withdrawal (SIGINT)"
+	"Ctrl-C during a match (SIGINT)"
 	"Kill one player (SIGKILL)"
 	"Kill all players and restart"
 	"Display exits last"
@@ -887,8 +916,9 @@ EVAL_TITLES=(
 EVAL_EXPECTED=(
 	"Team 1 wins, team 2 is eliminated, and the players remove all IPC."
 	"Both players exit normally after SIGINT and remove all IPC."
+	"A 2 vs 2 match is running (players have moved, nobody has won). After SIGINT all four players exit normally and the last one removes all IPC."
 	"After play starts, the victim exits on SIGKILL and the survivor wins and removes all IPC."
-	"After play starts, SIGKILL leaves all three IDs behind. Relaunch in the same directory, reclaim those IDs, and finish a new match."
+	"After play starts, SIGKILL leaves all three IDs behind. Relaunch in the same directory, reclaim those IDs, and finish a new match (two team 1 players, so it ends as soon as both join)."
 	"The display renders while the player is attached, then closes and removes all IPC after the player is killed."
 	"Teams 8 and 42 join (the FAQ sets no team limit), the display widens its tiles for 42, one team wins, and the players remove all IPC."
 	"With one player per team nobody can be eliminated, so both keep moving. Ctrl-C then stops both players and removes all IPC."
@@ -924,6 +954,10 @@ print_eval_game() {
 		sigint-withdrawal)
 			print_eval_check Game: sigint_stops_every_player 'Both players exited normally after Ctrl-C.' 'Could not confirm both players withdrew normally after SIGINT.'
 			;;
+		sigint-running)
+			print_eval_check Game: sigint_during_match_was_running 'The 2 vs 2 match was running when Ctrl-C was sent.' 'The match had not started, or had already ended, when Ctrl-C was sent.'
+			print_eval_check '' sigint_during_match_stops_every_player 'All four players exited normally after Ctrl-C.' 'Could not confirm all four players exited normally after SIGINT.'
+			;;
 		sigkill-survivor)
 			print_eval_check Game: sigkill_during_match_survivor_wins 'One player was killed. The survivor won.' 'Could not confirm the SIGKILL and survivor win.'
 			;;
@@ -952,6 +986,7 @@ print_eval_ipc() {
 	case "$1" in
 		normal-win) cleanup=ipcs_clean_after_normal_match ;;
 		sigint-withdrawal) cleanup=ipcs_clean_after_sigint_withdrawal ;;
+		sigint-running) cleanup=ipcs_clean_after_running_sigint ;;
 		sigkill-survivor) cleanup=ipc_cleanup_after_running_sigkill ;;
 		display-last) cleanup=ipc_cleanup_after_last_display ;;
 		large-teams) cleanup=ipcs_clean_after_large_team_match ;;
@@ -994,6 +1029,7 @@ run_eval_scenario() {
 	case "$name" in
 		normal-win) test_match_and_cleanup 1 ;;
 		sigint-withdrawal) test_signal_withdraws INT ;;
+		sigint-running) test_sigint_during_match 1 ;;
 		sigkill-survivor) test_sigkill_during_match ;;
 		all-killed-recovery) test_all_killed_then_rerun ;;
 		display-last) test_display_closes_last ;;
@@ -1075,6 +1111,7 @@ test_invalid_env
 test_display_without_session
 test_match_and_cleanup
 for signal in INT TERM HUP QUIT; do test_signal_withdraws "$signal"; done
+test_sigint_during_match
 test_over_join_refused
 test_simultaneous_launch
 test_display_renders_grid

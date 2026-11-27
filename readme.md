@@ -57,10 +57,10 @@ When you use a custom roster size, start the first command and wait for its join
 | Target | What it does |
 | --- | --- |
 | `make eval-list` | Name and expected result of each scenario |
-| `make eval` | All seven scenarios, with Valgrind |
+| `make eval` | All eight scenarios, with Valgrind |
 | `make eval SCENARIO=<name>` | One scenario. Add `VERBOSE=1` for full logs. |
 
-Scenarios: `normal-win`, `sigint-withdrawal`, `sigkill-survivor`, `all-killed-recovery`, `display-last`, `large-teams`, `one-on-one-stalemate`. Each one reruns a test from `make integration` and reports Game, Memory, and IPC results for the evaluator.
+Scenarios: `normal-win`, `sigint-withdrawal`, `sigint-running`, `sigkill-survivor`, `all-killed-recovery`, `display-last`, `large-teams`, `one-on-one-stalemate`. Each one reruns a test from `make integration` and reports Game, Memory, and IPC results for the evaluator.
 
 **Demos and inspection**
 
@@ -122,8 +122,10 @@ The commands are listed under [Make targets](#make-targets).
 `make unit` links the core objects from `obj/src/` without `main.o`, so the suites call
 `is_surrounded`, `join_player`, `leave_player`, `move_player`,
 `choose_target` and `parse_team` directly on a plain `t_board`. The movement
-suite checks forced moves and runs 400000 random move attempts before checking
-board consistency. The IPC suite uses private IPC objects and GNU linker
+suite checks forced moves and runs 400000 random move attempts. After every
+attempt it checks that each step was one orthogonal tile and that the board
+still holds exactly one player per occupied tile; a separate check confirms
+that this invariant test catches two players sharing a tile. The IPC suite uses private IPC objects and GNU linker
 wrapping to inject failures during session creation. It also checks empty and
 full message queues and team-specific target exchange.
 
@@ -133,7 +135,8 @@ therefore means a new session. The harness waits for its own child processes
 and checks their exit codes. It records the IPC IDs from each match's board
 and removes any of those objects that survive the match.
 
-The integration suite checks IPC cleanup after `SIGINT`, after a player is
+The integration suite checks IPC cleanup after `SIGINT` (both while waiting
+for the roster and during a running 2 vs 2 match), after a player is
 killed during a match, after the display exits last, and when a new run
 replaces a session whose last process was killed. It also plays a match
 between teams 8 and 42 to cover team ids beyond one digit, and checks that a

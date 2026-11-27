@@ -22,7 +22,12 @@ static int	bad_step(const t_board *board, int id, int before)
 	return (0);
 }
 
-/* cells[] and players[] must stay in sync, one player per tile. */
+/*
+** cells[] and players[] must stay in sync, one player per tile: every
+** occupied tile points at a live player standing on it, every live player's
+** tile points back at that player, and the number of occupied tiles matches
+** the roster count.
+*/
 static int	bad_invariants(const t_board *board)
 {
 	int	cell;
@@ -32,6 +37,16 @@ static int	bad_invariants(const t_board *board)
 
 	occupied = 0;
 	bad = 0;
+	id = 1;
+	while (id <= BOARD_CELLS)
+	{
+		if (board->players[id].team != 0
+			&& (board->players[id].cell < 0
+				|| board->players[id].cell >= BOARD_CELLS
+				|| board->cells[board->players[id].cell] != id))
+			bad++;
+		id++;
+	}
 	cell = 0;
 	while (cell < BOARD_CELLS)
 	{
@@ -50,7 +65,11 @@ static int	bad_invariants(const t_board *board)
 	return (bad);
 }
 
-static int	run_fuzz(t_board *board, int rounds)
+/*
+** Returns the number of illegal steps; *broken counts the rounds after which
+** the board no longer had exactly one player per occupied tile.
+*/
+static int	run_fuzz(t_board *board, int rounds, int *broken)
 {
 	int	round;
 	int	id;
@@ -58,6 +77,7 @@ static int	run_fuzz(t_board *board, int rounds)
 	int	bad;
 
 	bad = 0;
+	*broken = 0;
 	round = 0;
 	while (round < rounds)
 	{
@@ -66,6 +86,7 @@ static int	run_fuzz(t_board *board, int rounds)
 		if (board->players[id].team != 0
 			&& move_player(board, id, rand() % BOARD_CELLS))
 			bad += bad_step(board, id, before);
+		*broken += (bad_invariants(board) != 0);
 		round++;
 	}
 	return (bad);
@@ -75,6 +96,7 @@ static void	test_fuzz_invariants(t_suite *s)
 {
 	static t_board	b;
 	int				index;
+	int				broken;
 
 	srand(12345);
 	board_reset(&b, FUZZ_PLAYERS);
@@ -82,8 +104,29 @@ static void	test_fuzz_invariants(t_suite *s)
 	while (index < FUZZ_PLAYERS)
 		join_player(&b, (index++ % 3) + 1);
 	check(s, "fuzz_roster_joined", b.count, FUZZ_PLAYERS);
-	check(s, "fuzz_all_steps_legal", run_fuzz(&b, FUZZ_ROUNDS), 0);
+	check(s, "fuzz_all_steps_legal", run_fuzz(&b, FUZZ_ROUNDS, &broken), 0);
+	check(s, "fuzz_one_player_per_tile_every_round", broken, 0);
 	check(s, "fuzz_board_consistent", bad_invariants(&b), 0);
+}
+
+/* The invariant check must itself catch two players claiming one tile. */
+static void	test_invariants_detect_overlap(t_suite *s)
+{
+	t_board	b;
+
+	board_reset(&b, 2);
+	board_put(&b, 1, 1, cell_of(3, 3));
+	board_put(&b, 2, 2, cell_of(3, 4));
+	check(s, "invariants_accept_valid_board", bad_invariants(&b), 0);
+	b.cells[cell_of(3, 4)] = 0;
+	b.players[2].cell = cell_of(3, 3);
+	b.cells[cell_of(3, 3)] = 2;
+	check(s, "invariants_detect_shared_tile", bad_invariants(&b) > 0, true);
+	board_reset(&b, 2);
+	board_put(&b, 1, 1, cell_of(3, 3));
+	board_put(&b, 2, 2, cell_of(3, 4));
+	b.cells[cell_of(3, 4)] = 1;
+	check(s, "invariants_detect_ghost_tile", bad_invariants(&b) > 0, true);
 }
 
 /* A player walled in on all four sides must report that it cannot move. */
@@ -155,6 +198,7 @@ int	main(void)
 	test_blocked_player(&s);
 	test_corner_steps_stay_on_board(&s);
 	test_only_open_neighbor(&s);
+	test_invariants_detect_overlap(&s);
 	test_fuzz_invariants(&s);
 	return (suite_end(&s));
 }

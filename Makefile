@@ -115,7 +115,8 @@ test: unit integration ## Run unit + integration (about 2-3 minutes)
 #>   Six unit suites linked against the game objects (no main.o):
 #>     rules          capture rule, edges, targeting, team ids up to INT_MAX
 #>     roster         join, leave, winner, reaping dead and zombie players
-#>     movement       legal steps and 400000 random moves on a plain board
+#>     movement       legal steps; 400000 random moves, one player per tile
+#>                    checked after every move
 #>     config         LEMIPC_PLAYERS and team argument parsing
 #>     ipc            private IPC objects, injected creation failures, msgq
 #>     ipc_lifecycle  semaphore contention and shared session lifecycle
@@ -172,7 +173,9 @@ eval-list: ## List the evaluation scenarios
 #>
 #>   SCENARIO   one of:
 #>                normal-win            team 1 wins, players remove all IPC
-#>                sigint-withdrawal     Ctrl-C: both players leave cleanly
+#>                sigint-withdrawal     Ctrl-C while waiting: both leave cleanly
+#>                sigint-running        Ctrl-C during a 2 vs 2 match: all four
+#>                                      exit normally, last one removes IPC
 #>                sigkill-survivor      one player SIGKILLed, survivor wins
 #>                all-killed-recovery   everyone SIGKILLed, rerun reclaims IPC
 #>                display-last          the display exits last and cleans up
