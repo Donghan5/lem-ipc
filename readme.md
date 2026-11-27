@@ -1,6 +1,6 @@
 # lem-ipc
 
-A 42 project in which each player runs in its own process. Players share a board through System V shared memory and coordinate through a semaphore and a message queue.
+A 42 unix project in which each player runs in its own process. Players share a board through System V shared memory and coordinate through a semaphore and a message queue.
 
 ## Run a match
 
