@@ -50,7 +50,7 @@ When you use a custom roster size, start the first command and wait for its join
 | `make unit` | Six unit suites: rules, roster, movement, config, IPC, IPC lifecycle | seconds |
 | `make ipc-test` | Only the IPC unit suite: creation failures and team target messages | seconds |
 | `make integration` | Real processes over real System V IPC | about 2 min |
-| `make stress` | 400 players in 7 teams, plus semaphore lock recovery. Not part of `make test`. | about 1 min |
+| `make stress` | 400 players in 7 teams, plus semaphore lock recovery. Not part of `make test`. | seconds |
 
 **Evaluation scenarios**
 
@@ -154,10 +154,13 @@ the owner is killed. Valgrind checks the first player from each team (7 of
 memory check reports `SKIP` if Valgrind is unavailable. Use `VERBOSE=1`
 for Valgrind logs and lifecycle test details.
 
-On a slow machine the 30-second join stage can miss one or two of the 400
-players, which shows up as `Join FAIL 399/400`. This is a timing limit of the
-test, not a lost player: shutdown, Valgrind, and IPC cleanup still pass in
-that run.
+All 400 players join within a few seconds, and the whole run usually takes
+about two seconds. Players waiting for the roster lock the board every 100 ms
+but do not reap dead players: reaping reads `/proc` for every slot while
+holding the lock, and when every waiting player did it on every poll, late
+joiners starved and 400 joins took 30–40 seconds. A joiner still reaps once
+in `run_player` before taking a slot, and every turn reaps once the match is
+running, so a player killed while waiting is still removed.
 
 ### Shared output
 

@@ -42,7 +42,13 @@ static int	play_match(t_session *session, int player_id, int team)
 	ft_bzero(&target, sizeof(target));
 	while (lock_board(session) == 0)
 	{
-		reap_players(session->board);
+		/*
+		** Reaping reads /proc for every slot while holding the lock. Done on
+		** each 100ms poll by every waiting player, it starved late joiners
+		** (make stress). Joiners reap in run_player, so waiting skips it.
+		*/
+		if (session->board->phase != WAITING)
+			reap_players(session->board);
 		eliminated = session->board->phase == RUNNING
 			&& is_surrounded(session->board, player_id);
 		if (stop_requested() || eliminated || session->board->phase == FINISHED)

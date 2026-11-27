@@ -151,9 +151,7 @@ integration: $(NAME) $(IPC_PROBE) ## Run real-process tests and check session IP
 #>   SIGINT: every child reaped within 15s and SHM, SEM and MSGQ gone.
 #>   Valgrind checks the first player of each team. Also checks that a
 #>   blocked waiter gets the semaphore after the lock owner is SIGKILLed.
-#>
-#>   On a slow machine the join stage can report 399/400: a timing limit of
-#>   the test. Shutdown, Valgrind and IPC cleanup still pass in that run.
+#>   A run usually takes about two seconds.
 #>
 #>   VERBOSE=1  Valgrind logs and lifecycle test details
 stress: $(NAME) $(IPC_PROBE) $(TEST_DIR)/test_ipc_lifecycle ## Run the 400-player stress test and IPC lock recovery checks
